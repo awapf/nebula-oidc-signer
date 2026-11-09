@@ -1,0 +1,3 @@
+[tools]
+# Keep in sync with the `go` directive in go.mod (CI reads its version from there).
+go = "1.27.3"

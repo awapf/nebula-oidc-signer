@@ -139,6 +139,7 @@ func runClient(ctx context.Context, args []string, e env) error {
 		secretFile  = fs.String("client-secret-file", "", "file with the OIDC client secret, for confidential clients")
 		scopes      = fs.String("scopes", "openid,profile", "comma-separated OIDC scopes")
 		acrValues   = fs.String("acr-values", "", "acr_values to request (e.g. the passkey ACR)")
+		refreshFile = fs.String("refresh-token-file", "", "keep the OIDC refresh token here (0600) and renew without the browser while it works; request the offline_access scope")
 		device      = fs.String("device", "", "device name for people certificates (a-z, 0-9, '-')")
 		writeConfig = fs.String("write-config", "", "also write a nebula config (lighthouses from the signer, files from --out-dir) to this file")
 		pidFile     = fs.String("pidfile", "", "send SIGHUP to the nebula process in this pid file after renewing")
@@ -174,7 +175,7 @@ func runClient(ctx context.Context, args []string, e env) error {
 	case *issuer != "" && *clientID != "":
 		o := &client.OIDC{
 			Issuer: *issuer, ClientID: *clientID, ACRValues: *acrValues,
-			Scopes: strings.Split(*scopes, ","), OpenURL: e.openURL,
+			Scopes: strings.Split(*scopes, ","), OpenURL: e.openURL, RefreshFile: *refreshFile,
 		}
 		if o.OpenURL == nil {
 			o.OpenURL = func(u string) error { return openBrowser(e.stderr, u) }

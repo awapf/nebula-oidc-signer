@@ -176,8 +176,10 @@ issuers:
 		"--device", "laptop", "--out-dir", laptop, "--refresh-token-file", filepath.Join(laptop, "refresh.token")}, noBrowser); err != nil {
 		t.Fatalf("refresh renewal: %v (%s)", err, noBrowser.stderr)
 	}
-	if after, _ := os.ReadFile(filepath.Join(laptop, "host.crt")); bytes.Equal(before, after) {
-		t.Fatal("the refresh renewal should have issued a new certificate")
+	// (The certificate may be byte-identical: same key, IP and second, and
+	// ed25519 signatures are deterministic. The audit log below counts it.)
+	if people.Refreshes() != 1 {
+		t.Fatalf("want one refresh grant, got %d", people.Refreshes())
 	}
 
 	// A pod uses its projected token.

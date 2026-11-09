@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -37,7 +38,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if err := run(ctx, os.Args[1:], env{stdout: os.Stdout, stderr: os.Stderr}); err != nil {
-		fmt.Fprintln(os.Stderr, "nebula-oidc-signer:", err)
+		_, _ = fmt.Fprintln(os.Stderr, "nebula-oidc-signer:", err)
 		os.Exit(1)
 	}
 }
@@ -50,7 +51,7 @@ Run "nebula-oidc-signer <command> -h" for the flags of a command.`
 
 func run(ctx context.Context, args []string, e env) error {
 	if len(args) == 0 {
-		fmt.Fprintln(e.stderr, usage)
+		_, _ = fmt.Fprintln(e.stderr, usage)
 		return errors.New("no command")
 	}
 	switch args[0] {
@@ -59,10 +60,10 @@ func run(ctx context.Context, args []string, e env) error {
 	case "client":
 		return runClient(ctx, args[1:], e)
 	case "-h", "--help", "help":
-		fmt.Fprintln(e.stdout, usage)
+		_, _ = fmt.Fprintln(e.stdout, usage)
 		return nil
 	}
-	fmt.Fprintln(e.stderr, usage)
+	_, _ = fmt.Fprintln(e.stderr, usage)
 	return fmt.Errorf("unknown command %q", args[0])
 }
 
@@ -194,16 +195,16 @@ func runClient(ctx context.Context, args []string, e env) error {
 		PIDFile: *pidFile, RenewBefore: *renewBefore, RotateKey: *rotateKey,
 	}
 	if *watch > 0 {
-		return client.Watch(ctx, o, *watch, func(err error) { fmt.Fprintln(e.stderr, "renewal failed:", err) })
+		return client.Watch(ctx, o, *watch, func(err error) { _, _ = fmt.Fprintln(e.stderr, "renewal failed:", err) })
 	}
 	res, err := client.Run(ctx, o)
 	if err != nil {
 		return err
 	}
 	if res.Renewed {
-		fmt.Fprintf(e.stdout, "wrote %s, valid until %s\n", *outDir, res.NotAfter.UTC().Format(time.RFC3339))
+		_, _ = fmt.Fprintf(e.stdout, "wrote %s, valid until %s\n", *outDir, res.NotAfter.UTC().Format(time.RFC3339))
 	} else {
-		fmt.Fprintf(e.stdout, "certificate valid until %s, not renewed\n", res.NotAfter.UTC().Format(time.RFC3339))
+		_, _ = fmt.Fprintf(e.stdout, "certificate valid until %s, not renewed\n", res.NotAfter.UTC().Format(time.RFC3339))
 	}
 	return nil
 }
@@ -211,13 +212,18 @@ func runClient(ctx context.Context, args []string, e env) error {
 // openBrowser prints the URL and tries to open it; failing to launch a
 // browser is not an error.
 func openBrowser(w io.Writer, u string) error {
-	fmt.Fprintf(w, "Open this URL to log in:\n\n  %s\n\n", u)
+	_, _ = fmt.Fprintf(w, "Open this URL to log in:\n\n  %s\n\n", u)
+	// The URL comes from the IdP's discovery document: never hand anything
+	// but http(s) to the system opener.
+	if pu, err := url.Parse(u); err != nil || (pu.Scheme != "https" && pu.Scheme != "http") {
+		return fmt.Errorf("refusing to open non-http(s) authorization URL")
+	}
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "darwin":
-		cmd = exec.Command("open", u)
+		cmd = exec.Command("open", u) //nolint:gosec // http(s) URL checked above, no shell
 	case "linux", "freebsd", "openbsd", "netbsd":
-		cmd = exec.Command("xdg-open", u)
+		cmd = exec.Command("xdg-open", u) //nolint:gosec // http(s) URL checked above, no shell
 	default:
 		return nil
 	}

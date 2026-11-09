@@ -146,7 +146,7 @@ func Run(ctx context.Context, o Options) (Result, error) {
 	if err != nil {
 		return Result{}, fmt.Errorf("signer response rejected: %w", err)
 	}
-	if err := os.MkdirAll(o.OutDir, 0o755); err != nil {
+	if err := os.MkdirAll(o.OutDir, 0o750); err != nil {
 		return Result{}, err
 	}
 	// Key first: a crash between the writes leaves a new key with the old

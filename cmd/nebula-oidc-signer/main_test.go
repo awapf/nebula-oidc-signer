@@ -118,7 +118,9 @@ issuers:
 	ctx, cancel := context.WithCancel(context.Background())
 	var serverLog bytes.Buffer
 	served := make(chan error, 1)
-	go func() { served <- run(ctx, []string{"serve", "--config", cfgFile}, env{stdout: &serverLog, stderr: &serverLog}) }()
+	go func() {
+		served <- run(ctx, []string{"serve", "--config", cfgFile}, env{stdout: &serverLog, stderr: &serverLog})
+	}()
 	url := "http://" + addr
 	deadline := time.Now().Add(5 * time.Second)
 	for {

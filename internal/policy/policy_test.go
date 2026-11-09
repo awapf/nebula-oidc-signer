@@ -85,16 +85,16 @@ func k8s(sub string, kube map[string]any) token.Claims {
 	return token.Claims{"sub": sub, "kubernetes.io": kube}
 }
 
-func kubeClaim(ns, sa, pod, uid string) map[string]any {
+func kubeClaim(pod, uid string) map[string]any {
 	return map[string]any{
-		"namespace":      ns,
-		"serviceaccount": map[string]any{"name": sa, "uid": "sa-uid"},
+		"namespace":      "apps",
+		"serviceaccount": map[string]any{"name": "web", "uid": "sa-uid"},
 		"pod":            map[string]any{"name": pod, "uid": uid},
 	}
 }
 
 func TestKubernetesIdentity(t *testing.T) {
-	id, err := policy.KubernetesIdentity(k8s("system:serviceaccount:apps:web", kubeClaim("apps", "web", "web-7f9c", "pod-uid-1")))
+	id, err := policy.KubernetesIdentity(k8s("system:serviceaccount:apps:web", kubeClaim("web-7f9c", "pod-uid-1")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,11 +108,11 @@ func TestKubernetesIdentityRejects(t *testing.T) {
 		name   string
 		claims token.Claims
 	}{
-		{"malformed sub", k8s("alice", kubeClaim("apps", "web", "p", "u"))},
-		{"sub with too few parts", k8s("system:serviceaccount:apps", kubeClaim("apps", "web", "p", "u"))},
-		{"sub with extra parts", k8s("system:serviceaccount:apps:web:x", kubeClaim("apps", "web", "p", "u"))},
-		{"sub namespace mismatch", k8s("system:serviceaccount:other:web", kubeClaim("apps", "web", "p", "u"))},
-		{"sub sa mismatch", k8s("system:serviceaccount:apps:db", kubeClaim("apps", "web", "p", "u"))},
+		{"malformed sub", k8s("alice", kubeClaim("p", "u"))},
+		{"sub with too few parts", k8s("system:serviceaccount:apps", kubeClaim("p", "u"))},
+		{"sub with extra parts", k8s("system:serviceaccount:apps:web:x", kubeClaim("p", "u"))},
+		{"sub namespace mismatch", k8s("system:serviceaccount:other:web", kubeClaim("p", "u"))},
+		{"sub sa mismatch", k8s("system:serviceaccount:apps:db", kubeClaim("p", "u"))},
 		{"no kubernetes.io claim", token.Claims{"sub": "system:serviceaccount:apps:web"}},
 		{"not bound to a pod", k8s("system:serviceaccount:apps:web", map[string]any{
 			"namespace": "apps", "serviceaccount": map[string]any{"name": "web"},

@@ -140,7 +140,7 @@ func (v *Verifier) Verify(ctx context.Context, raw string) (Claims, error) {
 	if !slices.Contains(v.algs, jose.SignatureAlgorithm(alg)) {
 		return nil, reject("algorithm %q not allowed", alg)
 	}
-	jws, err := jose.ParseSigned(raw, v.algs)
+	jws, err := jose.ParseSignedCompact(raw, v.algs)
 	if err != nil {
 		return nil, reject("malformed JWS")
 	}

@@ -197,7 +197,7 @@ func (p *IdP) authorize(w http.ResponseWriter, r *http.Request) {
 	v.Set("code", code)
 	v.Set("state", q.Get("state"))
 	u.RawQuery = v.Encode()
-	http.Redirect(w, r, u.String(), http.StatusFound)
+	http.Redirect(w, r, u.String(), http.StatusFound) //nolint:gosec // test IdP redirects wherever the test asks
 }
 
 func (p *IdP) token(w http.ResponseWriter, r *http.Request) {

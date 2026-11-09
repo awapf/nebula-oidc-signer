@@ -199,3 +199,37 @@ func TestCheckCA(t *testing.T) {
 		t.Fatalf("unconstrained CA: %v", err)
 	}
 }
+
+func TestGrantCheck(t *testing.T) {
+	g := policy.Grant{
+		Groups:   []string{"people", "people-admin"},
+		Networks: []netip.Prefix{netip.MustParsePrefix("10.99.0.0/20"), netip.MustParsePrefix("fd00:99::/64")},
+	}
+	cases := []struct {
+		name    string
+		groups  []string
+		addr    string
+		wantErr string
+	}{
+		{"inside", []string{"people"}, "10.99.1.7", ""},
+		{"all groups", []string{"people", "people-admin"}, "10.99.15.254", ""},
+		{"no groups", nil, "10.99.1.7", ""},
+		{"ipv6 inside", []string{"people"}, "fd00:99::7", ""},
+		{"group outside", []string{"people", "infra"}, "10.99.1.7", "group"},
+		{"address outside", []string{"people"}, "10.99.16.1", "address"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := g.Check(tc.groups, netip.MustParseAddr(tc.addr))
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("want %q error, got %v", tc.wantErr, err)
+			}
+		})
+	}
+}

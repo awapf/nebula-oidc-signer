@@ -1,0 +1,15 @@
+# Binaries
+/nebula-oidc-signer
+dist/
+
+# Test and editor leftovers
+*.test
+*.out
+coverage.*
+.idea/
+.vscode/
+*.swp
+
+# Local state
+*.db
+*.db-*

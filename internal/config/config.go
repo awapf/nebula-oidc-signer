@@ -163,6 +163,12 @@ type Issuer struct {
 	// MaxAuthAge, optional, rejects tokens whose login (auth_time) is older
 	// than this. Set it when clients renew with refresh tokens.
 	MaxAuthAge Duration `yaml:"max_auth_age"`
+	// PasskeyEnforcedByIssuer stands in for acr_values/amr_values when the
+	// issuer's tokens carry neither (Kanidm) but the issuer itself only lets
+	// these people log in with a passkey (Kanidm: an account policy with
+	// credential-type-minimum passkey). The token can't show it, so this is
+	// the operator's word for it, and max_auth_age is required with it.
+	PasskeyEnforcedByIssuer bool `yaml:"passkey_enforced_by_issuer"`
 
 	// GrantConfig is the most this issuer's identities may ever receive.
 	GrantConfig *GrantConfig `yaml:"grant"`
@@ -552,8 +558,18 @@ func (c *Config) validateIssuer(i *Issuer) error {
 	if i.MaxAuthAge < 0 || i.MaxAuthAge > 0 && i.Kind != KindPeople {
 		return errors.New("max_auth_age must be positive and is only for people issuers")
 	}
-	if i.Kind == KindPeople && len(i.ACRValues) == 0 && len(i.AMRValues) == 0 {
-		return errors.New("people issuers need acr_values or amr_values (e.g. the passkey ACR)")
+	if i.PasskeyEnforcedByIssuer {
+		switch {
+		case i.Kind != KindPeople:
+			return errors.New("passkey_enforced_by_issuer is only for people issuers")
+		case len(i.ACRValues) > 0 || len(i.AMRValues) > 0:
+			return errors.New("passkey_enforced_by_issuer replaces acr_values and amr_values: set one, not both")
+		case i.MaxAuthAge == 0:
+			return errors.New("passkey_enforced_by_issuer needs max_auth_age: the token can't show a fresh passkey")
+		}
+	}
+	if i.Kind == KindPeople && len(i.ACRValues) == 0 && len(i.AMRValues) == 0 && !i.PasskeyEnforcedByIssuer {
+		return errors.New("people issuers need acr_values or amr_values (e.g. the passkey ACR), or passkey_enforced_by_issuer")
 	}
 	if err := c.compileGrant(i); err != nil {
 		return err

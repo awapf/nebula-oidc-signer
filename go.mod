@@ -7,6 +7,7 @@ require (
 	github.com/go-jose/go-jose/v4 v4.1.9
 	github.com/slackhq/nebula v1.12.0
 	go.yaml.in/yaml/v3 v3.0.6
+	golang.org/x/time v0.15.0
 	modernc.org/sqlite v1.62.0
 )
 

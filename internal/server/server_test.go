@@ -443,11 +443,12 @@ func TestRuleOutsideCAAtIssueTime(t *testing.T) {
 		c.Issuers[0].Rules()[1].Groups = []string{"root"}
 	}))
 	_, pubPEM := newHostKey(t)
+	signs := h.transit.SignCount("nebula-people")
 	code, r := h.sign(pubPEM, h.personToken(nil), "laptop")
 	if code != http.StatusForbidden || !strings.Contains(r.Error, "outside") {
 		t.Fatalf("want 403 outside CA, got %d %q", code, r.Error)
 	}
-	if h.transit.SignCount("nebula-people") != 0 {
+	if h.transit.SignCount("nebula-people") != signs {
 		t.Fatal("nothing may be signed for an out-of-constraint rule")
 	}
 }

@@ -72,7 +72,7 @@ func write(t *testing.T, cfg m) string {
 	return p
 }
 
-func issuer(c m, i int) m { return c["issuers"].([]any)[i].(m) }
+func issuer(c m, i int) m  { return c["issuers"].([]any)[i].(m) }
 func rule(c m, i, j int) m { return issuer(c, i)["rules"].([]any)[j].(m) }
 
 func TestLoadValid(t *testing.T) {

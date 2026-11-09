@@ -47,6 +47,7 @@ type IdP struct {
 	refresh        map[string]login
 	refreshes      int
 	noRefreshIDTok bool
+	tokenStatus    int
 }
 
 type grant struct {
@@ -234,6 +235,13 @@ func (p *IdP) SetRefreshWithoutIDToken(v bool) {
 	p.noRefreshIDTok = v
 }
 
+// SetTokenStatus makes the token endpoint fail with status (0 restores it).
+func (p *IdP) SetTokenStatus(status int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.tokenStatus = status
+}
+
 func badGrant(w http.ResponseWriter) {
 	w.WriteHeader(http.StatusBadRequest)
 	writeJSON(w, map[string]string{"error": "invalid_grant"})
@@ -250,6 +258,11 @@ func (p *IdP) token(w http.ResponseWriter, r *http.Request) {
 	f := r.PostForm
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.tokenStatus != 0 {
+		w.WriteHeader(p.tokenStatus)
+		writeJSON(w, map[string]string{"error": "server_error"})
+		return
+	}
 	c := map[string]any{}
 	maps.Copy(c, p.authClaims)
 	var l login

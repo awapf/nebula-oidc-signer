@@ -137,3 +137,23 @@ func TestNoRefreshFileWithoutOfflineAccess(t *testing.T) {
 		t.Fatalf("no refresh token was issued, so none should be stored: %v", err)
 	}
 }
+
+func TestRefreshTransientErrorKeepsTheToken(t *testing.T) {
+	idp, src, logins := refreshSetup(t)
+	getToken(t, src)
+	rt := readRefresh(t, src)
+	idp.SetTokenStatus(http.StatusServiceUnavailable)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := src.Token(ctx); err == nil {
+		t.Fatal("want an error while the IdP is down")
+	}
+	if logins.Load() != 1 || readRefresh(t, src) != rt {
+		t.Fatalf("a 503 must neither open the browser nor drop the refresh token (logins %d)", logins.Load())
+	}
+	idp.SetTokenStatus(0)
+	getToken(t, src)
+	if logins.Load() != 1 || idp.Refreshes() != 1 {
+		t.Fatalf("after recovery the refresh token works: logins %d refreshes %d", logins.Load(), idp.Refreshes())
+	}
+}

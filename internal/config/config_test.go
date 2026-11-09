@@ -177,6 +177,23 @@ func TestLoadRejects(t *testing.T) {
 		}, "reserved"},
 		{"max_auth_age on a kubernetes issuer", func(c m) { issuer(c, 1)["max_auth_age"] = "12h" }, "max_auth_age"},
 		{"negative max_auth_age", func(c m) { issuer(c, 0)["max_auth_age"] = "-1h" }, "max_auth_age"},
+		{"passkey_enforced_by_issuer with acr_values", func(c m) {
+			issuer(c, 0)["passkey_enforced_by_issuer"] = true
+			issuer(c, 0)["max_auth_age"] = "1h"
+		}, "passkey_enforced_by_issuer"},
+		{"passkey_enforced_by_issuer with amr_values", func(c m) {
+			delete(issuer(c, 0), "acr_values")
+			issuer(c, 0)["amr_values"] = []any{"hwk"}
+			issuer(c, 0)["passkey_enforced_by_issuer"] = true
+			issuer(c, 0)["max_auth_age"] = "1h"
+		}, "passkey_enforced_by_issuer"},
+		{"passkey_enforced_by_issuer without max_auth_age", func(c m) {
+			delete(issuer(c, 0), "acr_values")
+			issuer(c, 0)["passkey_enforced_by_issuer"] = true
+		}, "max_auth_age"},
+		{"passkey_enforced_by_issuer on a kubernetes issuer", func(c m) {
+			issuer(c, 1)["passkey_enforced_by_issuer"] = true
+		}, "passkey_enforced_by_issuer"},
 		{"bad cert_version", func(c m) { c["cas"].([]any)[0].(m)["cert_version"] = 3 }, "cert_version"},
 	}
 	for _, tc := range cases {
@@ -312,6 +329,23 @@ func TestNetworkRejects(t *testing.T) {
 				t.Fatalf("want error containing %q, got %v", tc.want, err)
 			}
 		})
+	}
+}
+
+// An issuer whose tokens carry no acr/amr (Kanidm) but that only lets these
+// people log in with a passkey: the operator says so explicitly, and must
+// bound the login's age, since the token can't show a fresh passkey.
+func TestPasskeyEnforcedByIssuer(t *testing.T) {
+	c := base(t)
+	delete(issuer(c, 0), "acr_values")
+	issuer(c, 0)["passkey_enforced_by_issuer"] = true
+	issuer(c, 0)["max_auth_age"] = "1h"
+	cfg, err := config.Load(write(t, c))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Issuers[0].PasskeyEnforcedByIssuer || cfg.Issuers[1].PasskeyEnforcedByIssuer {
+		t.Fatalf("passkey_enforced_by_issuer %v %v", cfg.Issuers[0].PasskeyEnforcedByIssuer, cfg.Issuers[1].PasskeyEnforcedByIssuer)
 	}
 }
 

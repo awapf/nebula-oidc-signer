@@ -89,6 +89,7 @@ func New(ctx context.Context, cfg *config.Config, o Options) (*Server, error) {
 			Algorithms:  ic.Algorithms,
 			MaxTokenAge: ic.MaxTokenAge.D(),
 			MaxLifetime: ic.MaxTokenLifetime.D(),
+			MaxAuthAge:  ic.MaxAuthAge.D(),
 			ClockSkew:   cfg.ClockSkew.D(),
 			Now:         o.Now,
 		})

@@ -1,0 +1,96 @@
+# Example nebula-oidc-signer configuration. All durations are Go durations
+# ("90s", "10m", "12h").
+
+# Listen address. Put TLS in front (or set tls:) — tokens travel in the body.
+listen: 127.0.0.1:8080
+# tls:
+#   cert_file: /etc/nebula-oidc-signer/tls.crt
+#   key_file: /etc/nebula-oidc-signer/tls.key
+
+# SQLite lease database: one stable overlay IP per (issuer, subject, device).
+database: /var/lib/nebula-oidc-signer/leases.db
+# Keep an address reserved this long after its certificate expired.
+lease_grace: 24h
+# Tolerated clock skew on exp/nbf/iat.
+clock_skew: 30s
+
+rate_limit:
+  per_ip_per_minute: 30       # all requests, before any token check
+  per_subject_per_minute: 6   # issuances per verified subject
+
+# OpenBao/Vault. The token needs only the policy in README.md. token_file is
+# re-read on every issuance (e.g. an agent sink); without it BAO_TOKEN or
+# VAULT_TOKEN is used.
+transit:
+  address: https://bao.example.com:8200
+  token_file: /run/nebula-oidc-signer/bao-token
+  # namespace: team-a
+  # mount: transit
+  # ca_cert_file: /etc/ssl/bao-ca.pem
+
+# Nebula CAs whose private keys are non-exportable ed25519 transit keys.
+cas:
+  - name: people
+    transit_key: nebula-people
+    key_version: 1
+    cert_file: /etc/nebula-oidc-signer/people-ca.crt
+    # During a CA rotation, hand out both CAs:
+    # bundle_file: /etc/nebula-oidc-signer/people-bundle.crt
+  - name: workloads
+    transit_key: nebula-k8s-cluster-a
+    cert_file: /etc/nebula-oidc-signer/k8s-cluster-a-ca.crt
+
+issuers:
+  # People log in with an OIDC provider and a passkey.
+  - name: idm
+    kind: people
+    issuer: https://idm.example.com/oauth2/openid/nebula
+    audience: nebula            # the OIDC client ID
+    jwks: {discovery: true}
+    algorithms: [ES256, RS256]
+    max_token_age: 10m
+    username_claim: preferred_username
+    groups_claim: groups
+    # The token's acr must be one of these (or set amr_values).
+    acr_values: [urn:example:passkey]
+    rules:                      # first match wins; no match is a 403
+      - name: admins
+        match: {groups: [nebula_admins]}
+        ca: people
+        groups: [people, admin]
+        pool: 10.99.1.0/24      # addresses are allocated from here
+        network_bits: 16        # the certificate gets 10.99.1.x/16
+        duration: 12h
+      - name: users
+        match: {groups: [nebula_users]}
+        ca: people
+        groups: [people]
+        pool: 10.99.2.0/23
+        network_bits: 16
+        duration: 8h
+
+  # Pods present a projected service account token with this audience.
+  - name: cluster-a
+    kind: kubernetes
+    issuer: https://kubernetes.default.svc.cluster.local
+    audience: nebula-signer
+    # API servers are rarely reachable from outside; export the keys with
+    #   kubectl get --raw /openid/v1/jwks > cluster-a.jwks
+    jwks: {file: /etc/nebula-oidc-signer/cluster-a.jwks}
+    max_token_age: 10m
+    max_token_lifetime: 1h      # request expirationSeconds <= 3600
+    rules:
+      - name: ingress
+        match: {namespace: ingress, service_account: "*"}
+        ca: workloads
+        groups: [k8s, ingress]
+        pool: 10.99.8.0/24
+        network_bits: 16
+        duration: 1h
+      - name: apps
+        match: {namespace: "app-*", service_account: "nebula-*"}
+        ca: workloads
+        groups: [k8s]
+        pool: 10.99.9.0/24
+        network_bits: 16
+        duration: 1h

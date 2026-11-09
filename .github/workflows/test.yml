@@ -1,0 +1,61 @@
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  OPENBAO_VERSION: "2.7.2"
+
+jobs:
+  build:
+    name: Build, vet, lint, unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: go mod download
+      - run: go build -v ./...
+      - run: go vet ./...
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.15.0
+      - name: Unit and end-to-end tests
+        run: go test -race -cover ./...
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+
+  acceptance:
+    name: Acceptance (OpenBao)
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Install OpenBao ${{ env.OPENBAO_VERSION }}
+        run: |
+          base="https://github.com/openbao/openbao/releases/download/v${OPENBAO_VERSION}"
+          tarball="openbao_${OPENBAO_VERSION}_linux_amd64.tar.gz"
+          mkdir -p "$RUNNER_TEMP/openbao"
+          cd "$RUNNER_TEMP/openbao"
+          curl -fsSLO "$base/$tarball"
+          curl -fsSLO "$base/checksums.txt"
+          grep " ${tarball}\$" checksums.txt | sha256sum -c -
+          tar -xzf "$tarball" bao
+          echo "$RUNNER_TEMP/openbao" >> "$GITHUB_PATH"
+      - name: Acceptance tests
+        env:
+          NEBULA_SIGNER_ACC: "1"
+        run: |
+          bao version
+          go test -v -count=1 -run TestAcc ./...

@@ -194,3 +194,28 @@ func TestBundleFile(t *testing.T) {
 		t.Fatalf("want bundle error, got %v", err)
 	}
 }
+
+func TestExampleConfigLoads(t *testing.T) {
+	b, err := os.ReadFile("../../examples/config.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := transittest.NewServer(t)
+	people := testca.New(t, s, "nebula-people", []string{"people", "admin"}, "10.99.0.0/16")
+	k8s := testca.New(t, s, "nebula-k8s-cluster-a", []string{"k8s", "ingress"}, "10.99.0.0/16")
+	text := strings.NewReplacer(
+		"/etc/nebula-oidc-signer/people-ca.crt", people.File,
+		"/etc/nebula-oidc-signer/k8s-cluster-a-ca.crt", k8s.File,
+	).Replace(string(b))
+	p := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(p, []byte(text), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(p)
+	if err != nil {
+		t.Fatalf("examples/config.yaml: %v", err)
+	}
+	if len(cfg.Issuers) != 2 || len(cfg.Issuers[1].Rules()) != 2 {
+		t.Fatalf("unexpected example: %+v", cfg.Issuers)
+	}
+}

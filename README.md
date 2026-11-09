@@ -70,7 +70,12 @@ certificates, and policy decides the groups and addresses.
   no `HS*`, so no "public key as HMAC secret"). Keys come from the issuer's
   JWKS: OIDC discovery, or a pinned file for Kubernetes.
 - **Weak logins.** People issuers must require an `acr` (or `amr`) value, so
-  you can insist on passkeys.
+  you can insist on passkeys. Some IdPs put neither in their tokens (Kanidm)
+  but can refuse anything but a passkey for a group (Kanidm: an account
+  policy with `credential-type-minimum passkey`). For those, set
+  `passkey_enforced_by_issuer: true` instead: the signer then takes the IdP's
+  word for it, so every group your rules match must have that policy, and
+  `max_auth_age` is required, as the token can't show a fresh passkey.
 - **Refresh tokens.** With `--refresh-token-file` a laptop holds an OIDC
   refresh token (0600, next to `host.key`), which can renew the certificate
   without the passkey. Bound it in two places: let the IdP rotate refresh
@@ -128,7 +133,9 @@ See [`examples/config.yaml`](examples/config.yaml). In short:
 - `issuers`: `kind: people` or `kind: kubernetes`, `issuer`, `audience`,
   `jwks` (`discovery: true` or `file:`), `max_token_age`, `algorithms`.
   - people: `username_claim` (default `preferred_username`), `groups_claim`
-    (default `groups`), `acr_values` / `amr_values` (one of them required),
+    (default `groups`), `acr_values` / `amr_values` (one of them required, or
+    `passkey_enforced_by_issuer: true` for an IdP that enforces passkeys
+    itself, with `max_auth_age`; see Weak logins),
     `max_auth_age` (optional; requires `auth_time` and caps the age of the
     login, set it when clients use refresh tokens).
     The certificate name is `<username>/<device>`.

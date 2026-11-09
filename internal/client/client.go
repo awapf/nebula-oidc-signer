@@ -37,6 +37,9 @@ type Options struct {
 	Device string
 	// OutDir receives host.crt, host.key and ca.crt.
 	OutDir string
+	// ConfigFile, when set, receives a nebula config built from the
+	// signer's network block and pointing at the files in OutDir.
+	ConfigFile string
 	// PIDFile, when set, is the nebula process sent SIGHUP after renewal.
 	PIDFile string
 	// RenewBefore skips the request while the current certificate is
@@ -123,7 +126,7 @@ func Run(ctx context.Context, o Options) (Result, error) {
 	}
 	priv, pub, haveKey := o.loadKey()
 	if haveKey && o.RenewBefore > 0 {
-		if na, ok := o.current(pub); ok && na.Sub(o.Now()) > o.RenewBefore {
+		if na, ok := o.current(pub); ok && na.Sub(o.Now()) > o.RenewBefore && o.haveConfig() {
 			return Result{NotAfter: na}, nil
 		}
 	}
@@ -146,6 +149,12 @@ func Run(ctx context.Context, o Options) (Result, error) {
 	if err != nil {
 		return Result{}, fmt.Errorf("signer response rejected: %w", err)
 	}
+	var nebulaCfg []byte
+	if o.ConfigFile != "" {
+		if nebulaCfg, err = NebulaConfig(resp.Network, o.OutDir); err != nil {
+			return Result{}, fmt.Errorf("signer response rejected: %w", err)
+		}
+	}
 	if err := os.MkdirAll(o.OutDir, 0o750); err != nil {
 		return Result{}, err
 	}
@@ -162,6 +171,14 @@ func Run(ctx context.Context, o Options) (Result, error) {
 	if err := writeAtomic(o.path(CertFile), []byte(resp.Certificate), 0o644); err != nil {
 		return Result{}, err
 	}
+	if nebulaCfg != nil {
+		if err := os.MkdirAll(filepath.Dir(o.ConfigFile), 0o750); err != nil {
+			return Result{}, err
+		}
+		if err := writeAtomic(o.ConfigFile, nebulaCfg, 0o644); err != nil {
+			return Result{}, err
+		}
+	}
 	res := Result{Renewed: true, NotAfter: c.NotAfter()}
 	if o.PIDFile != "" {
 		if err := signalPIDFile(o.PIDFile); err != nil {
@@ -172,10 +189,20 @@ func Run(ctx context.Context, o Options) (Result, error) {
 }
 
 type signResponse struct {
-	Certificate string `json:"certificate"`
-	CABundle    string `json:"ca_bundle"`
-	NotAfter    string `json:"not_after"`
-	Error       string `json:"error"`
+	Certificate string   `json:"certificate"`
+	CABundle    string   `json:"ca_bundle"`
+	NotAfter    string   `json:"not_after"`
+	Network     *Network `json:"network"`
+	Error       string   `json:"error"`
+}
+
+// haveConfig reports whether no config is wanted or it already exists.
+func (o *Options) haveConfig() bool {
+	if o.ConfigFile == "" {
+		return true
+	}
+	_, err := os.Stat(o.ConfigFile)
+	return err == nil
 }
 
 func (o *Options) request(ctx context.Context, pub []byte, tok string) (*signResponse, error) {

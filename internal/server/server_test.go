@@ -181,6 +181,8 @@ type signResponse struct {
 	CABundle    string `json:"ca_bundle"`
 	NotAfter    string `json:"not_after"`
 	Error       string `json:"error"`
+	// Network is decoded generically to pin the wire format.
+	Network map[string]any `json:"network"`
 }
 
 func (h *harness) postRaw(body string) (int, signResponse) {
@@ -550,4 +552,41 @@ func TestNewFailsWhenCAKeyDoesNotMatchTransit(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "does not belong to transit key") {
 		t.Fatalf("want startup error, got %v", err)
 	}
+}
+
+func TestSignReturnsTheCAsNetwork(t *testing.T) {
+	h := newHarness(t, withConfig(func(c *config.Config) {
+		c.CA("k8s").Network = &config.Network{
+			Lighthouses: []config.Lighthouse{{Address: netip.MustParseAddr("10.99.255.1"), Endpoints: []string{"lh1.example.com:4242"}}},
+			Relays:      []netip.Addr{netip.MustParseAddr("10.99.255.1")},
+		}
+	}))
+	_, pubPEM := newHostKey(t)
+	code, r := h.sign(pubPEM, h.kubeToken("system:serviceaccount:apps:web-1", kubeClaims("apps", "web-1", "web-1-x", "uid-1")), "")
+	if code != http.StatusOK {
+		t.Fatalf("status %d: %s", code, r.Error)
+	}
+	want := map[string]any{
+		"lighthouses": []any{map[string]any{"address": "10.99.255.1", "endpoints": []any{"lh1.example.com:4242"}}},
+		"relays":      []any{"10.99.255.1"},
+	}
+	if got, _ := json.Marshal(r.Network); string(got) != mustJSON(t, want) {
+		t.Fatalf("network %s, want %s", got, mustJSON(t, want))
+	}
+
+	// A CA without a network block returns none.
+	_, pubPEM = newHostKey(t)
+	code, r = h.sign(pubPEM, h.personToken(nil), "laptop")
+	if code != http.StatusOK || r.Network != nil {
+		t.Fatalf("status %d, network %v", code, r.Network)
+	}
+}
+
+func mustJSON(t *testing.T, v any) string {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
 }

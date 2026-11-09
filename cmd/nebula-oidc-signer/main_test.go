@@ -91,7 +91,10 @@ listen: %q
 database: %s/leases.db
 transit: {address: %q, token_file: %q}
 cas:
-  - {name: people, transit_key: nebula-people, cert_file: %q}
+  - name: people
+    transit_key: nebula-people
+    cert_file: %q
+    network: {lighthouses: [{address: 10.99.255.1, endpoints: ["192.0.2.1:4242"]}]}
   - {name: k8s, transit_key: nebula-k8s, cert_file: %q}
 issuers:
   - name: idm
@@ -142,12 +145,17 @@ issuers:
 	// A person logs in with the browser flow.
 	laptop := t.TempDir()
 	if err := run(ctx, []string{"client", "--server", url, "--issuer", people.URL, "--client-id", "nebula",
-		"--scopes", "openid,profile,groups", "--device", "laptop", "--out-dir", laptop}, e); err != nil {
+		"--scopes", "openid,profile,groups", "--device", "laptop", "--out-dir", laptop,
+		"--write-config", filepath.Join(laptop, "config.yml")}, e); err != nil {
 		t.Fatalf("people client: %v (%s)", err, e.stderr)
 	}
 	pc := checkFiles(t, laptop, []string{"people"})
 	if pc.Name() != "alice/laptop" {
 		t.Fatalf("name %q", pc.Name())
+	}
+	nc, err := os.ReadFile(filepath.Join(laptop, "config.yml"))
+	if err != nil || !strings.Contains(string(nc), "192.0.2.1:4242") || !strings.Contains(string(nc), filepath.Join(laptop, "host.crt")) {
+		t.Fatalf("config.yml: %v\n%s", err, nc)
 	}
 	// A renewal check inside the window leaves everything alone.
 	before, _ := os.ReadFile(filepath.Join(laptop, "host.crt"))

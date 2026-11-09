@@ -39,6 +39,8 @@ type stubSigner struct {
 	// respond, when set, replaces the normal response.
 	respond func(w http.ResponseWriter, pub []byte)
 	life    time.Duration
+	// network, when set, is returned as the response's network block.
+	network map[string]any
 }
 
 func newStub(t *testing.T) *stubSigner {
@@ -95,7 +97,7 @@ func (s *stubSigner) handle(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(s.issue(pub))
 }
 
-func (s *stubSigner) issue(pub []byte) map[string]string {
+func (s *stubSigner) issue(pub []byte) map[string]any {
 	c, err := transitsign.IssueHost(s.ca.Cert, s.key, s.key.Signer(context.Background()), pub, transitsign.Spec{
 		Version: 2, Name: "n", Networks: []netip.Prefix{netip.MustParsePrefix("10.99.1.2/16")}, Duration: s.life,
 	})
@@ -103,7 +105,11 @@ func (s *stubSigner) issue(pub []byte) map[string]string {
 		s.t.Error(err)
 	}
 	p, _ := c.MarshalPEM()
-	return map[string]string{"certificate": string(p), "ca_bundle": s.ca.PEM, "not_after": c.NotAfter().UTC().Format(time.RFC3339)}
+	out := map[string]any{"certificate": string(p), "ca_bundle": s.ca.PEM, "not_after": c.NotAfter().UTC().Format(time.RFC3339)}
+	if s.network != nil {
+		out["network"] = s.network
+	}
+	return out
 }
 
 type staticToken string

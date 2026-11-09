@@ -12,6 +12,7 @@ import (
 	"os"
 	"path"
 	"slices"
+	"strconv"
 	"time"
 
 	"github.com/awapf/terraform-provider-nebula/transitsign"
@@ -106,10 +107,39 @@ type CA struct {
 	// CertFile.
 	BundleFile  string `yaml:"bundle_file"`
 	CertVersion int64  `yaml:"cert_version"`
+	// NetworkConfig, optional, describes the Nebula network this CA's hosts
+	// join; it is returned with every certificate so clients can write a
+	// complete nebula config.
+	NetworkConfig *NetworkConfig `yaml:"network"`
 
 	Cert      cert.Certificate `yaml:"-"`
+	Network   *Network         `yaml:"-"`
 	CertPEM   string           `yaml:"-"`
 	BundlePEM string           `yaml:"-"`
+}
+
+// NetworkConfig is a network block as written in the file.
+type NetworkConfig struct {
+	Lighthouses []struct {
+		Address   string   `yaml:"address"`
+		Endpoints []string `yaml:"endpoints"`
+	} `yaml:"lighthouses"`
+	Relays []string `yaml:"relays"`
+}
+
+// Network is what a host needs to join the Nebula network besides its
+// certificate.
+type Network struct {
+	Lighthouses []Lighthouse
+	// Relays are overlay addresses of hosts that relay for this one.
+	Relays []netip.Addr
+}
+
+// Lighthouse is a lighthouse's overlay address and its public
+// "host:port" endpoints (static_host_map).
+type Lighthouse struct {
+	Address   netip.Addr
+	Endpoints []string
 }
 
 // Issuer is a trusted token issuer and its rules.
@@ -373,6 +403,9 @@ func (ca *CA) load() error {
 	if ca.Cert, err = transitsign.ParseCA(ca.CertPEM, nil); err != nil {
 		return fmt.Errorf("cert_file: %w", err)
 	}
+	if ca.Network, err = compileNetwork(ca.NetworkConfig); err != nil {
+		return fmt.Errorf("network: %w", err)
+	}
 	ca.BundlePEM = ca.CertPEM
 	if ca.BundleFile == "" {
 		return nil
@@ -395,6 +428,74 @@ func (ca *CA) load() error {
 		return errors.New("bundle_file does not contain the CA from cert_file")
 	}
 	ca.BundlePEM = string(b)
+	return nil
+}
+
+func compileNetwork(nc *NetworkConfig) (*Network, error) {
+	if nc == nil {
+		return nil, nil
+	}
+	if len(nc.Lighthouses) == 0 {
+		return nil, errors.New("at least one lighthouse is required")
+	}
+	n := &Network{}
+	seen := map[netip.Addr]bool{}
+	for i, l := range nc.Lighthouses {
+		a, err := netip.ParseAddr(l.Address)
+		if err != nil {
+			return nil, fmt.Errorf("lighthouses[%d]: invalid address %q", i, l.Address)
+		}
+		if seen[a] {
+			return nil, fmt.Errorf("lighthouses[%d]: duplicate address %s", i, a)
+		}
+		seen[a] = true
+		if len(l.Endpoints) == 0 {
+			return nil, fmt.Errorf("lighthouses[%d]: endpoints are required", i)
+		}
+		for _, e := range l.Endpoints {
+			if err := validEndpoint(e); err != nil {
+				return nil, fmt.Errorf("lighthouses[%d]: %w", i, err)
+			}
+		}
+		n.Lighthouses = append(n.Lighthouses, Lighthouse{Address: a, Endpoints: l.Endpoints})
+	}
+	for i, r := range nc.Relays {
+		a, err := netip.ParseAddr(r)
+		if err != nil {
+			return nil, fmt.Errorf("relays[%d]: invalid relay address %q", i, r)
+		}
+		n.Relays = append(n.Relays, a)
+	}
+	return n, nil
+}
+
+func validEndpoint(e string) error {
+	host, port, err := net.SplitHostPort(e)
+	if err == nil && host != "" {
+		if p, perr := strconv.Atoi(port); perr == nil && p >= 1 && p <= 65535 {
+			return nil
+		}
+	}
+	return fmt.Errorf("endpoint %q must be host:port", e)
+}
+
+// checkRuleNetwork makes the CA's lighthouses and relays reachable over the
+// overlay from every certificate the rule issues.
+func checkRuleNetwork(n *Network, r policy.Rule) error {
+	if n == nil {
+		return nil
+	}
+	certNet := netip.PrefixFrom(r.Pool.Addr(), r.NetworkBits).Masked()
+	for _, l := range n.Lighthouses {
+		if !certNet.Contains(l.Address) {
+			return fmt.Errorf("lighthouse %s is outside the certificate network %s; widen network_bits", l.Address, certNet)
+		}
+	}
+	for _, a := range n.Relays {
+		if !certNet.Contains(a) {
+			return fmt.Errorf("relay %s is outside the certificate network %s; widen network_bits", a, certNet)
+		}
+	}
 	return nil
 }
 
@@ -520,7 +621,7 @@ func (c *Config) compileRule(kind string, rc RuleConfig) (policy.Rule, error) {
 	if err := policy.CheckCA(ca.Cert, r.Groups, []netip.Prefix{first, last}); err != nil {
 		return r, err
 	}
-	return r, nil
+	return r, checkRuleNetwork(ca.Network, r)
 }
 
 func lastAddr(p netip.Prefix) netip.Addr {

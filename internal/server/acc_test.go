@@ -95,6 +95,7 @@ issuers:
     jwks: {discovery: true}
     max_token_age: 5m
     acr_values: [urn:passkey]
+    grant: {groups: [people], networks: [10.99.0.0/21]}
     rules:
       - {name: users, match: {groups: [nebula_users]}, ca: people, groups: [people], pool: 10.99.2.0/24, network_bits: 16, duration: 1h}
 `, dir, bao.addr, write("token", tok.Auth.ClientToken), key, write("ca.crt", string(caPEM)), idp.URL))

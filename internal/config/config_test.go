@@ -24,9 +24,10 @@ func base(t *testing.T) m {
 	people := testca.New(t, s, "nebula-people", []string{"people", "admin"}, "10.99.0.0/16")
 	k8s := testca.New(t, s, "nebula-k8s", nil, "10.99.0.0/16")
 	return m{
-		"listen":   "127.0.0.1:8080",
-		"database": filepath.Join(t.TempDir(), "leases.db"),
-		"transit":  m{"address": "https://bao.example:8200", "token_file": "/run/secrets/token"},
+		"listen":          "127.0.0.1:8080",
+		"reserved_groups": []any{"infra", "lighthouse"},
+		"database":        filepath.Join(t.TempDir(), "leases.db"),
+		"transit":         m{"address": "https://bao.example:8200", "token_file": "/run/secrets/token"},
 		"cas": []any{
 			m{"name": "people", "transit_key": "nebula-people", "cert_file": people.File},
 			m{"name": "k8s", "transit_key": "nebula-k8s", "key_version": 1, "cert_file": k8s.File},
@@ -38,6 +39,7 @@ func base(t *testing.T) m {
 				"jwks":          m{"discovery": true},
 				"max_token_age": "10m",
 				"acr_values":    []any{"urn:passkey"},
+				"grant":         m{"groups": []any{"people", "admin"}, "networks": []any{"10.99.0.0/21"}},
 				"rules": []any{
 					m{"name": "admins", "match": m{"groups": []any{"nebula_admins"}}, "ca": "people",
 						"groups": []any{"admin", "people"}, "pool": "10.99.1.0/24", "network_bits": 16, "duration": "12h"},
@@ -50,6 +52,7 @@ func base(t *testing.T) m {
 				"issuer": "https://kubernetes.default.svc", "audience": "nebula-signer",
 				"jwks":          m{"file": "/etc/nebula-oidc-signer/cluster-a.jwks"},
 				"max_token_age": "10m",
+				"grant":         m{"groups": []any{"k8s"}, "networks": []any{"10.99.8.0/21"}},
 				"rules": []any{
 					m{"name": "apps", "match": m{"namespace": "apps", "service_account": "*"}, "ca": "k8s",
 						"groups": []any{"k8s"}, "pool": "10.99.8.0/22", "network_bits": 16, "duration": "1h"},
@@ -99,6 +102,12 @@ func TestLoadValid(t *testing.T) {
 		rules[0].Pool != netip.MustParsePrefix("10.99.1.0/24") || rules[0].Match.Groups[0] != "nebula_admins" {
 		t.Fatalf("compiled rules %+v", rules)
 	}
+	if g := idm.Grant(); len(g.Groups) != 2 || len(g.Networks) != 1 || g.Networks[0] != netip.MustParsePrefix("10.99.0.0/21") {
+		t.Fatalf("compiled grant %+v", g)
+	}
+	if len(cfg.ReservedGroups) != 2 {
+		t.Fatalf("reserved_groups %v", cfg.ReservedGroups)
+	}
 	k := cfg.Issuers[1]
 	if k.MaxTokenLifetime.D() != time.Hour {
 		t.Fatalf("kubernetes max_token_lifetime default: %s", k.MaxTokenLifetime)
@@ -146,6 +155,26 @@ func TestLoadRejects(t *testing.T) {
 		{"duplicate ca names", func(c m) { c["cas"].([]any)[1].(m)["name"] = "people" }, "duplicate"},
 		{"missing ca cert", func(c m) { c["cas"].([]any)[0].(m)["cert_file"] = "/nonexistent.crt" }, "cert_file"},
 		{"ca transit_key missing", func(c m) { delete(c["cas"].([]any)[0].(m), "transit_key") }, "transit_key"},
+		{"issuer without grant", func(c m) { delete(issuer(c, 0), "grant") }, "grant"},
+		{"grant without networks", func(c m) { issuer(c, 0)["grant"] = m{"groups": []any{"people"}} }, "grant"},
+		{"grant with a bad network", func(c m) { issuer(c, 0)["grant"].(m)["networks"] = []any{"10.99.0.0"} }, "grant"},
+		{"unknown grant field", func(c m) { issuer(c, 0)["grant"].(m)["group"] = []any{"x"} }, "group"},
+		{"rule group outside grant", func(c m) {
+			issuer(c, 0)["grant"].(m)["groups"] = []any{"people"}
+		}, "grant"},
+		{"pool outside grant", func(c m) { issuer(c, 0)["grant"].(m)["networks"] = []any{"10.99.2.0/24"} }, "grant"},
+		{"pool partly outside grant", func(c m) {
+			issuer(c, 0)["grant"].(m)["networks"] = []any{"10.99.1.0/25", "10.99.2.0/24"}
+		}, "grant"},
+		{"grant groups overlap between issuers", func(c m) {
+			issuer(c, 1)["grant"].(m)["groups"] = []any{"k8s", "people"}
+		}, "overlap"},
+		{"grant networks overlap between issuers", func(c m) {
+			issuer(c, 1)["grant"].(m)["networks"] = []any{"10.99.0.0/16"}
+		}, "overlap"},
+		{"reserved group in grant", func(c m) {
+			issuer(c, 0)["grant"].(m)["groups"] = []any{"people", "admin", "infra"}
+		}, "reserved"},
 		{"bad cert_version", func(c m) { c["cas"].([]any)[0].(m)["cert_version"] = 3 }, "cert_version"},
 	}
 	for _, tc := range cases {
@@ -201,7 +230,7 @@ func TestExampleConfigLoads(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := transittest.NewServer(t)
-	people := testca.New(t, s, "nebula-people", []string{"people", "admin"}, "10.99.0.0/16")
+	people := testca.New(t, s, "nebula-people", []string{"people", "people-admin"}, "10.99.0.0/16")
 	k8s := testca.New(t, s, "nebula-k8s-cluster-a", []string{"k8s", "ingress"}, "10.99.0.0/16")
 	text := strings.NewReplacer(
 		"/etc/nebula-oidc-signer/people-ca.crt", people.File,

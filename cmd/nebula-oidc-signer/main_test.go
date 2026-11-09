@@ -101,6 +101,7 @@ issuers:
     jwks: {discovery: true}
     max_token_age: 5m
     acr_values: [urn:passkey]
+    grant: {groups: [people], networks: [10.99.0.0/21]}
     rules:
       - {name: users, match: {groups: [nebula_users]}, ca: people, groups: [people], pool: 10.99.2.0/24, network_bits: 16, duration: 8h}
   - name: cluster-a
@@ -109,6 +110,7 @@ issuers:
     audience: nebula-signer
     jwks: {file: %q}
     max_token_age: 5m
+    grant: {groups: [k8s], networks: [10.99.8.0/21]}
     rules:
       - {name: apps, match: {namespace: apps, service_account: "*"}, ca: k8s, groups: [k8s], pool: 10.99.8.0/22, network_bits: 16, duration: 1h}
 `, addr, dir, transit.URL, tokenFile, peopleCA.File, kubeCA.File, people.URL, kube.URL, kube.WriteJWKS(dir))

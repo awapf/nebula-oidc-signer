@@ -89,6 +89,7 @@ func newHarness(t *testing.T, opts ...harnessOpt) *harness {
 	}
 	yaml := fmt.Sprintf(`
 database: %[1]s/leases.db
+reserved_groups: [infra]
 rate_limit: {per_ip_per_minute: %[2]d, per_subject_per_minute: %[3]d}
 transit: {address: %[4]q, token_file: %[5]q}
 cas:
@@ -102,6 +103,7 @@ issuers:
     jwks: {discovery: true}
     max_token_age: 5m
     acr_values: [urn:passkey]
+    grant: {groups: [admin, people], networks: [10.99.0.0/21]}
     rules:
       - {name: admins, match: {groups: [nebula_admins]}, ca: people, groups: [admin, people], pool: 10.99.1.0/24, network_bits: 16, duration: 12h}
       - {name: users, match: {groups: [nebula_users]}, ca: people, groups: [people], pool: 10.99.2.0/24, network_bits: 16, duration: 8h}
@@ -112,6 +114,7 @@ issuers:
     audience: nebula-signer
     jwks: {file: %[10]q}
     max_token_age: 5m
+    grant: {groups: [k8s, web], networks: [10.99.8.0/21]}
     rules:
       - {name: web, match: {namespace: apps, service_account: "web*"}, ca: k8s, groups: [k8s, web], pool: 10.99.8.0/22, network_bits: 16, duration: 1h}
 `, dir, hc.perIP, hc.perSubject, h.transit.URL, tokenFile, h.peopleC.File, h.kubeC.File,
@@ -450,6 +453,26 @@ func TestRuleOutsideCAAtIssueTime(t *testing.T) {
 	}
 	if h.transit.SignCount("nebula-people") != signs {
 		t.Fatal("nothing may be signed for an out-of-constraint rule")
+	}
+}
+
+func TestRuleOutsideGrantAtIssueTime(t *testing.T) {
+	// Config load rejects this; move a pool outside the grant after loading
+	// to check the issue-time guard. 10.99.20.0/24 is inside the CA.
+	h := newHarness(t, withConfig(func(c *config.Config) {
+		c.Issuers[0].Rules()[1].Pool = netip.MustParsePrefix("10.99.20.0/24")
+	}))
+	_, pubPEM := newHostKey(t)
+	signs := h.transit.SignCount("nebula-people")
+	code, r := h.sign(pubPEM, h.personToken(nil), "laptop")
+	if code != http.StatusForbidden || !strings.Contains(r.Error, "grant") {
+		t.Fatalf("want 403 outside grant, got %d %q", code, r.Error)
+	}
+	if h.transit.SignCount("nebula-people") != signs {
+		t.Fatal("nothing may be signed outside the grant")
+	}
+	if !strings.Contains(h.logs.String(), "outside the issuer's grant") {
+		t.Fatalf("audit log should say why: %s", h.logs.String())
 	}
 }
 

@@ -191,3 +191,24 @@ func CheckCA(ca cert.Certificate, groups []string, networks []netip.Prefix) erro
 	}
 	return nil
 }
+
+// Grant is the most an authentication source may ever receive: certificate
+// groups from Groups and addresses inside Networks.
+type Grant struct {
+	Groups   []string
+	Networks []netip.Prefix
+}
+
+// Check reports whether a certificate with groups and address addr stays
+// inside the grant.
+func (g Grant) Check(groups []string, addr netip.Addr) error {
+	for _, grp := range groups {
+		if !slices.Contains(g.Groups, grp) {
+			return deny("group %q is outside the issuer's grant %v", grp, g.Groups)
+		}
+	}
+	if !slices.ContainsFunc(g.Networks, func(n netip.Prefix) bool { return n.Contains(addr) }) {
+		return deny("address %s is outside the issuer's grant %v", addr, g.Networks)
+	}
+	return nil
+}

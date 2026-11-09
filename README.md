@@ -71,6 +71,13 @@ certificates, and policy decides the groups and addresses.
   JWKS: OIDC discovery, or a pinned file for Kubernetes.
 - **Weak logins.** People issuers must require an `acr` (or `amr`) value, so
   you can insist on passkeys.
+- **Refresh tokens.** With `--refresh-token-file` a laptop holds an OIDC
+  refresh token (0600, next to `host.key`), which can renew the certificate
+  without the passkey. Bound it in two places: let the IdP rotate refresh
+  tokens and cap the session, and set `max_auth_age` on the issuer. The
+  signer then rejects ID tokens whose `auth_time`, the last real login, is
+  older than that, however fresh the token. Disabling the person in the IdP
+  takes effect at the next hourly renewal.
 - **Defence in depth.** Rules are checked against their issuer's grant and
   their CA's constraints at config load and again at issue time. Every transit signature is verified
   against the key's public half, and every certificate against its CA, before
@@ -121,7 +128,9 @@ See [`examples/config.yaml`](examples/config.yaml). In short:
 - `issuers`: `kind: people` or `kind: kubernetes`, `issuer`, `audience`,
   `jwks` (`discovery: true` or `file:`), `max_token_age`, `algorithms`.
   - people: `username_claim` (default `preferred_username`), `groups_claim`
-    (default `groups`), `acr_values` / `amr_values` (one of them required).
+    (default `groups`), `acr_values` / `amr_values` (one of them required),
+    `max_auth_age` (optional; requires `auth_time` and caps the age of the
+    login, set it when clients use refresh tokens).
     The certificate name is `<username>/<device>`.
   - kubernetes: the `sub` must be `system:serviceaccount:<ns>:<sa>` and agree
     with the `kubernetes.io` claim, and the token must be bound to a pod and
@@ -183,12 +192,18 @@ unless `--rotate-key` is set. With `--pidfile` it sends nebula a SIGHUP after
 renewing.
 
 A person (opens the browser; auth code + PKCE with a loopback redirect, so
-register `http://127.0.0.1` as a redirect URI for a public client):
+register `http://127.0.0.1` as a redirect URI for a public client). With
+`--refresh-token-file` and the `offline_access` scope, the browser is needed
+only for the first login and after the IdP ends the session (or
+`max_auth_age` passes). Renewals in between use the refresh token, so
+certificates can be short-lived (1h, renewed with `--watch`):
 
 ```sh
 nebula-oidc-signer client --server https://signer.example.com \
   --issuer https://idm.example.com/oauth2/openid/nebula --client-id nebula \
-  --scopes openid,profile,groups --device laptop \
+  --scopes openid,profile,groups,offline_access --device laptop \
+  --refresh-token-file /var/lib/nebula-signer/refresh.token \
+  --renew-before 20m --watch 5m \
   --out-dir /etc/nebula --write-config /etc/nebula/config.d/00-signer.yml \
   --pidfile /run/nebula.pid
 ```
@@ -212,6 +227,12 @@ next to it and run `nebula -config /etc/nebula/config.d`. Nebula merges the
 files in lexical order and appends lists, so your `firewall.inbound` rules
 add to the generated ones. The tests check the generated config with
 nebula's own config test (`nebula -test`).
+
+The client always tries the refresh token first. If the IdP rejects it, the
+client deletes it and opens the browser. If the IdP is unreachable (5xx,
+network), the client keeps the token and reports an error, so `--watch`
+retries instead of opening a browser. Some IdPs return no ID token on
+refresh; then every renewal is a browser login.
 
 `--renew-before D` makes a run a no-op while the current certificate is valid
 for longer than `D`, which suits a systemd timer. `--watch I` keeps checking

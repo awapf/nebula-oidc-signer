@@ -157,3 +157,22 @@ func TestRefreshTransientErrorKeepsTheToken(t *testing.T) {
 		t.Fatalf("after recovery the refresh token works: logins %d refreshes %d", logins.Load(), idp.Refreshes())
 	}
 }
+
+func TestUnreadableRefreshFileIsAnError(t *testing.T) {
+	_, src, logins := refreshSetup(t)
+	getToken(t, src)
+	if err := os.Chmod(src.RefreshFile, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.ReadFile(src.RefreshFile); err == nil {
+		t.Skip("running as root: file permissions are not enforced")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := src.Token(ctx); err == nil || !strings.Contains(err.Error(), "refresh token") {
+		t.Fatalf("want an error about the refresh token file, got %v", err)
+	}
+	if logins.Load() != 1 {
+		t.Fatal("an unreadable file must not silently fall back to the browser")
+	}
+}

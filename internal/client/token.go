@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/url"
@@ -96,8 +97,14 @@ func (o *OIDC) tokenRequest(ctx context.Context, hc *http.Client, endpoint strin
 // or the IdP rejected it; then a browser login is needed.
 func (o *OIDC) refresh(ctx context.Context, hc *http.Client, endpoint string) (idToken string, ok bool, err error) {
 	b, err := os.ReadFile(o.RefreshFile)
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("reading the refresh token: %w", err)
+	}
 	rt := strings.TrimSpace(string(b))
-	if err != nil || rt == "" {
+	if rt == "" {
 		return "", false, nil
 	}
 	tr, err := o.tokenRequest(ctx, hc, endpoint, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {rt}})

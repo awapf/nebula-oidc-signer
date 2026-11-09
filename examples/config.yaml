@@ -40,6 +40,16 @@ cas:
     cert_file: /etc/nebula-oidc-signer/people-ca.crt
     # During a CA rotation, hand out both CAs:
     # bundle_file: /etc/nebula-oidc-signer/people-bundle.crt
+    # Optional: returned with every certificate, so `client --write-config`
+    # can write a complete nebula config. Lighthouses and relays must lie
+    # inside every certificate network of this CA's rules (network_bits).
+    network:
+      lighthouses:
+        - address: 10.99.255.1
+          endpoints: ["lighthouse1.example.com:4242"]
+        - address: 10.99.255.2
+          endpoints: ["lighthouse2.example.com:4242"]
+      relays: [10.99.255.1]
   - name: workloads
     transit_key: nebula-k8s-cluster-a
     cert_file: /etc/nebula-oidc-signer/k8s-cluster-a-ca.crt

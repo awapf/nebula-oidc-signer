@@ -113,7 +113,11 @@ policy.
 See [`examples/config.yaml`](examples/config.yaml). In short:
 
 - `cas`: transit key name and version plus the CA certificate (and an optional
-  bundle for rotations).
+  bundle for rotations). An optional `network` block (`lighthouses` with
+  their overlay `address` and public `endpoints`, and `relays`) is returned
+  with every certificate of that CA. Its addresses must lie inside the
+  certificate network of each rule using the CA, or hosts could not reach
+  them over the overlay.
 - `issuers`: `kind: people` or `kind: kubernetes`, `issuer`, `audience`,
   `jwks` (`discovery: true` or `file:`), `max_token_age`, `algorithms`.
   - people: `username_claim` (default `preferred_username`), `groups_claim`
@@ -153,8 +157,11 @@ exhausted pool gives a 503 naming the pool.
 (1–32 characters of `a-z`, `0-9`, inner `-`). The response:
 
 ```json
-{"certificate": "-----BEGIN NEBULA CERTIFICATE V2-----…", "ca_bundle": "…", "not_after": "2030-01-01T12:00:00Z"}
+{"certificate": "-----BEGIN NEBULA CERTIFICATE V2-----…", "ca_bundle": "…", "not_after": "2030-01-01T12:00:00Z",
+ "network": {"lighthouses": [{"address": "10.99.255.1", "endpoints": ["lighthouse1.example.com:4242"]}], "relays": ["10.99.255.1"]}}
 ```
+
+`network` is present only when the CA has a `network` block.
 
 Errors are `{"error": "…"}` with 400 (bad request), 401 (invalid token), 403
 (policy), 413 (body too large), 429 (rate limited), 502 (transit) or 503 (pool
@@ -182,7 +189,8 @@ register `http://127.0.0.1` as a redirect URI for a public client):
 nebula-oidc-signer client --server https://signer.example.com \
   --issuer https://idm.example.com/oauth2/openid/nebula --client-id nebula \
   --scopes openid,profile,groups --device laptop \
-  --out-dir /etc/nebula --pidfile /run/nebula.pid
+  --out-dir /etc/nebula --write-config /etc/nebula/config.d/00-signer.yml \
+  --pidfile /run/nebula.pid
 ```
 
 A pod (sidecar), with a projected token
@@ -193,6 +201,17 @@ nebula-oidc-signer client --server https://signer.example.com \
   --token-file /var/run/secrets/nebula/token --out-dir /etc/nebula \
   --renew-before 20m --watch 1m --pidfile /run/nebula/nebula.pid
 ```
+
+With `--write-config FILE` the client also writes a nebula config: `pki`
+pointing at the files in `--out-dir`, `static_host_map`, `lighthouse.hosts`
+and `relay` from the signer, outbound open and inbound closed except ICMP.
+The file is overwritten on every renewal. For your own settings, such as
+inbound firewall rules, write the file into a directory
+(`--write-config /etc/nebula/config.d/00-signer.yml`), add your own files
+next to it and run `nebula -config /etc/nebula/config.d`. Nebula merges the
+files in lexical order and appends lists, so your `firewall.inbound` rules
+add to the generated ones. The tests check the generated config with
+nebula's own config test (`nebula -test`).
 
 `--renew-before D` makes a run a no-op while the current certificate is valid
 for longer than `D`, which suits a systemd timer. `--watch I` keeps checking

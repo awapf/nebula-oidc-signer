@@ -140,6 +140,7 @@ func runClient(ctx context.Context, args []string, e env) error {
 		scopes      = fs.String("scopes", "openid,profile", "comma-separated OIDC scopes")
 		acrValues   = fs.String("acr-values", "", "acr_values to request (e.g. the passkey ACR)")
 		device      = fs.String("device", "", "device name for people certificates (a-z, 0-9, '-')")
+		writeConfig = fs.String("write-config", "", "also write a nebula config (lighthouses from the signer, files from --out-dir) to this file")
 		pidFile     = fs.String("pidfile", "", "send SIGHUP to the nebula process in this pid file after renewing")
 		renewBefore = fs.Duration("renew-before", 0, "only renew when the current certificate expires within this duration")
 		watch       = fs.Duration("watch", 0, "keep running and check every interval (use with --renew-before)")
@@ -192,7 +193,7 @@ func runClient(ctx context.Context, args []string, e env) error {
 
 	o := client.Options{
 		Server: *serverURL, HTTPClient: hc, Token: src, Device: *device, OutDir: *outDir,
-		PIDFile: *pidFile, RenewBefore: *renewBefore, RotateKey: *rotateKey,
+		ConfigFile: *writeConfig, PIDFile: *pidFile, RenewBefore: *renewBefore, RotateKey: *rotateKey,
 	}
 	if *watch > 0 {
 		return client.Watch(ctx, o, *watch, func(err error) { _, _ = fmt.Fprintln(e.stderr, "renewal failed:", err) })

@@ -39,7 +39,7 @@ func base(t *testing.T) m {
 				"jwks":          m{"discovery": true},
 				"max_token_age": "10m",
 				"acr_values":    []any{"urn:passkey"},
-				"grant":         m{"groups": []any{"people", "admin"}, "networks": []any{"10.99.0.0/20"}},
+				"grant":         m{"groups": []any{"people", "admin"}, "networks": []any{"10.99.0.0/21"}},
 				"rules": []any{
 					m{"name": "admins", "match": m{"groups": []any{"nebula_admins"}}, "ca": "people",
 						"groups": []any{"admin", "people"}, "pool": "10.99.1.0/24", "network_bits": 16, "duration": "12h"},
@@ -102,7 +102,7 @@ func TestLoadValid(t *testing.T) {
 		rules[0].Pool != netip.MustParsePrefix("10.99.1.0/24") || rules[0].Match.Groups[0] != "nebula_admins" {
 		t.Fatalf("compiled rules %+v", rules)
 	}
-	if g := idm.Grant(); len(g.Groups) != 2 || len(g.Networks) != 1 || g.Networks[0] != netip.MustParsePrefix("10.99.0.0/20") {
+	if g := idm.Grant(); len(g.Groups) != 2 || len(g.Networks) != 1 || g.Networks[0] != netip.MustParsePrefix("10.99.0.0/21") {
 		t.Fatalf("compiled grant %+v", g)
 	}
 	if len(cfg.ReservedGroups) != 2 {
@@ -230,7 +230,7 @@ func TestExampleConfigLoads(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := transittest.NewServer(t)
-	people := testca.New(t, s, "nebula-people", []string{"people", "admin"}, "10.99.0.0/16")
+	people := testca.New(t, s, "nebula-people", []string{"people", "people-admin"}, "10.99.0.0/16")
 	k8s := testca.New(t, s, "nebula-k8s-cluster-a", []string{"k8s", "ingress"}, "10.99.0.0/16")
 	text := strings.NewReplacer(
 		"/etc/nebula-oidc-signer/people-ca.crt", people.File,

@@ -11,6 +11,10 @@ listen: 127.0.0.1:8080
 database: /var/lib/nebula-oidc-signer/leases.db
 # Keep an address reserved this long after its certificate expired.
 lease_grace: 24h
+# Groups the signer must never issue: the groups your infrastructure hosts
+# rely on in their firewall rules. No grant may contain them.
+reserved_groups: [infra, lighthouse, admin]
+
 # Tolerated clock skew on exp/nbf/iat.
 clock_skew: 30s
 
@@ -53,11 +57,17 @@ issuers:
     groups_claim: groups
     # The token's acr must be one of these (or set amr_values).
     acr_values: [urn:example:passkey]
+    # The most a login from this issuer can ever receive. Group names and
+    # networks must not overlap with other issuers' grants, so a cert's
+    # groups and address tell which kind of login produced it.
+    grant:
+      groups: [people, people-admin]
+      networks: [10.99.0.0/21]
     rules:                      # first match wins; no match is a 403
       - name: admins
         match: {groups: [nebula_admins]}
         ca: people
-        groups: [people, admin]
+        groups: [people, people-admin]
         pool: 10.99.1.0/24      # addresses are allocated from here
         network_bits: 16        # the certificate gets 10.99.1.x/16
         duration: 12h
@@ -79,6 +89,9 @@ issuers:
     jwks: {file: /etc/nebula-oidc-signer/cluster-a.jwks}
     max_token_age: 10m
     max_token_lifetime: 1h      # request expirationSeconds <= 3600
+    grant:
+      groups: [k8s, ingress]
+      networks: [10.99.8.0/21]
     rules:
       - name: ingress
         match: {namespace: ingress, service_account: "*"}

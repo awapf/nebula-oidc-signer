@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"slices"
 	"time"
 
 	"github.com/awapf/terraform-provider-nebula/transitsign"
@@ -58,6 +59,9 @@ type Config struct {
 	Listen   string `yaml:"listen"`
 	TLS      *TLS   `yaml:"tls"`
 	Database string `yaml:"database"`
+	// ReservedGroups are never issued: no grant may contain them. List the
+	// groups your infrastructure hosts rely on.
+	ReservedGroups []string `yaml:"reserved_groups"`
 	// LeaseGrace is how long an address stays reserved after its
 	// certificate expired.
 	LeaseGrace Duration  `yaml:"lease_grace"`
@@ -127,10 +131,23 @@ type Issuer struct {
 	ACRValues     []string `yaml:"acr_values"`
 	AMRValues     []string `yaml:"amr_values"`
 
+	// GrantConfig is the most this issuer's identities may ever receive.
+	GrantConfig *GrantConfig `yaml:"grant"`
+
 	RuleConfigs []RuleConfig `yaml:"rules"`
 
 	rules []policy.Rule
+	grant policy.Grant
 }
+
+// GrantConfig is a grant as written in the file.
+type GrantConfig struct {
+	Groups   []string `yaml:"groups"`
+	Networks []string `yaml:"networks"`
+}
+
+// Grant returns the issuer's compiled grant.
+func (i *Issuer) Grant() policy.Grant { return i.grant }
 
 // JWKS says where an issuer's keys come from: OIDC discovery or a file
 // (e.g. `kubectl get --raw /openid/v1/jwks`).
@@ -267,6 +284,70 @@ func (c *Config) validate() error {
 		}
 		seen[i.Name] = true
 	}
+	return c.checkGrantOverlaps()
+}
+
+// checkGrantOverlaps makes every group name and every address belong to at
+// most one issuer, so a certificate's groups and address say which kind of
+// login produced it.
+func (c *Config) checkGrantOverlaps() error {
+	owner := map[string]string{}
+	for _, i := range c.Issuers {
+		for _, g := range i.grant.Groups {
+			if o, ok := owner[g]; ok && o != i.Name {
+				return fmt.Errorf("issuers %s and %s: grant group %q overlaps; each issuer needs its own group names", o, i.Name, g)
+			}
+			owner[g] = i.Name
+		}
+	}
+	for a, ia := range c.Issuers {
+		for _, ib := range c.Issuers[a+1:] {
+			for _, na := range ia.grant.Networks {
+				for _, nb := range ib.grant.Networks {
+					if na.Overlaps(nb) {
+						return fmt.Errorf("issuers %s and %s: grant networks %s and %s overlap", ia.Name, ib.Name, na, nb)
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func (c *Config) compileGrant(i *Issuer) error {
+	gc := i.GrantConfig
+	if gc == nil {
+		return errors.New("grant is required: list the groups and networks this issuer may receive")
+	}
+	if len(gc.Networks) == 0 {
+		return errors.New("grant needs at least one network")
+	}
+	nets, err := transitsign.ParsePrefixes(gc.Networks)
+	if err != nil {
+		return fmt.Errorf("grant: %w", err)
+	}
+	for n := range nets {
+		nets[n] = nets[n].Masked()
+	}
+	for _, g := range gc.Groups {
+		if slices.Contains(c.ReservedGroups, g) {
+			return fmt.Errorf("grant group %q is reserved", g)
+		}
+	}
+	i.grant = policy.Grant{Groups: gc.Groups, Networks: nets}
+	return nil
+}
+
+// checkRuleGrant makes the rule's groups and whole pool fit the grant.
+func checkRuleGrant(g policy.Grant, r policy.Rule) error {
+	for _, grp := range r.Groups {
+		if !slices.Contains(g.Groups, grp) {
+			return fmt.Errorf("group %q is outside the issuer's grant %v", grp, g.Groups)
+		}
+	}
+	if !slices.ContainsFunc(g.Networks, func(n netip.Prefix) bool { return n.Bits() <= r.Pool.Bits() && n.Contains(r.Pool.Addr()) }) {
+		return fmt.Errorf("pool %s is outside the issuer's grant %v", r.Pool, g.Networks)
+	}
 	return nil
 }
 
@@ -367,6 +448,9 @@ func (c *Config) validateIssuer(i *Issuer) error {
 	if i.Kind == KindPeople && len(i.ACRValues) == 0 && len(i.AMRValues) == 0 {
 		return errors.New("people issuers need acr_values or amr_values (e.g. the passkey ACR)")
 	}
+	if err := c.compileGrant(i); err != nil {
+		return err
+	}
 	if len(i.RuleConfigs) == 0 {
 		return errors.New("at least one rule is required")
 	}
@@ -375,6 +459,9 @@ func (c *Config) validateIssuer(i *Issuer) error {
 	for n, rc := range i.RuleConfigs {
 		r, err := c.compileRule(i.Kind, rc)
 		if err != nil {
+			return fmt.Errorf("rules[%d] (%s): %w", n, rc.Name, err)
+		}
+		if err := checkRuleGrant(i.grant, r); err != nil {
 			return fmt.Errorf("rules[%d] (%s): %w", n, rc.Name, err)
 		}
 		if names[r.Name] {

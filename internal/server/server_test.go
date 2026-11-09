@@ -590,3 +590,16 @@ func mustJSON(t *testing.T, v any) string {
 	}
 	return string(b)
 }
+
+func TestMaxAuthAgeAtIssueTime(t *testing.T) {
+	h := newHarness(t, withConfig(func(c *config.Config) { c.Issuers[0].MaxAuthAge = config.Duration(12 * time.Hour) }))
+	_, pubPEM := newHostKey(t)
+	old := time.Now().Add(-13 * time.Hour).Unix()
+	if code, r := h.sign(pubPEM, h.personToken(map[string]any{"auth_time": old}), "laptop"); code != http.StatusUnauthorized || !strings.Contains(r.Error, "auth_time") {
+		t.Fatalf("status %d: %s", code, r.Error)
+	}
+	recent := time.Now().Add(-time.Hour).Unix()
+	if code, r := h.sign(pubPEM, h.personToken(map[string]any{"auth_time": recent}), "laptop"); code != http.StatusOK {
+		t.Fatalf("status %d: %s", code, r.Error)
+	}
+}

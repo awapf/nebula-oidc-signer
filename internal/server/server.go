@@ -196,6 +196,29 @@ type signResponse struct {
 	Certificate string `json:"certificate"`
 	CABundle    string `json:"ca_bundle"`
 	NotAfter    string `json:"not_after"`
+	// Network is the CA's network block, when configured.
+	Network *networkJSON `json:"network,omitempty"`
+}
+
+type networkJSON struct {
+	Lighthouses []lighthouseJSON `json:"lighthouses"`
+	Relays      []netip.Addr     `json:"relays,omitempty"`
+}
+
+type lighthouseJSON struct {
+	Address   netip.Addr `json:"address"`
+	Endpoints []string   `json:"endpoints"`
+}
+
+func toNetworkJSON(n *config.Network) *networkJSON {
+	if n == nil {
+		return nil
+	}
+	out := &networkJSON{Relays: n.Relays}
+	for _, l := range n.Lighthouses {
+		out.Lighthouses = append(out.Lighthouses, lighthouseJSON{Address: l.Address, Endpoints: l.Endpoints})
+	}
+	return out
 }
 
 // failure is a rejected request: status and message go to the client,
@@ -418,5 +441,6 @@ func (s *Server) sign(w http.ResponseWriter, r *http.Request, a *audit) (*signRe
 		Certificate: string(pemBytes),
 		CABundle:    ca.BundlePEM,
 		NotAfter:    c.NotAfter().UTC().Format(time.RFC3339),
+		Network:     toNetworkJSON(ca.Network),
 	}, nil
 }

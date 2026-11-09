@@ -383,6 +383,9 @@ func (s *Server) sign(w http.ResponseWriter, r *http.Request, a *audit) (*signRe
 		}
 		return nil, err
 	}
+	if err := iss.cfg.Grant().Check(rule.Groups, addr); err != nil {
+		return nil, fail(http.StatusForbidden, "certificate would be outside the issuer's grant", err.Error())
+	}
 	network := netip.PrefixFrom(addr, rule.NetworkBits)
 	if err := policy.CheckCA(ca.Cert, rule.Groups, []netip.Prefix{network}); err != nil {
 		return nil, fail(http.StatusForbidden, "rule is outside its CA's constraints", err.Error())

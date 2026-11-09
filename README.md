@@ -49,6 +49,15 @@ certificates, and policy decides the groups and addresses.
   tight `groups` and `networks` (e.g. `nebula-people`,
   `nebula-k8s-<cluster>`). Do not let the signer's CAs carry the groups your
   infrastructure hosts use. The signer cannot read or export CA keys.
+- **Group names are global in Nebula firewalls.** A rule like
+  `groups: [admin]` matches a certificate from *any* CA the host trusts. So
+  each issuer has a `grant`: the only groups and networks its logins can ever
+  receive. Grants may not overlap between issuers, so a certificate's groups
+  and address tell which kind of login produced it. `reserved_groups` lists
+  your infrastructure's groups, and no grant may contain one, even if a CA or
+  a rule would allow it. On the hosts, pin sensitive firewall rules to a CA
+  (`ca_name`/`ca_sha`) and don't trust the signer's CAs where you don't need
+  them.
 - **Never give workloads `transit/sign` directly.** Then any workload could
   sign any certificate the CA allows, with any group and IP. The signer is
   the policy enforcement point.
@@ -62,8 +71,8 @@ certificates, and policy decides the groups and addresses.
   JWKS: OIDC discovery, or a pinned file for Kubernetes.
 - **Weak logins.** People issuers must require an `acr` (or `amr`) value, so
   you can insist on passkeys.
-- **Defence in depth.** Rules are checked against their CA's constraints at
-  config load and again at issue time. Every transit signature is verified
+- **Defence in depth.** Rules are checked against their issuer's grant and
+  their CA's constraints at config load and again at issue time. Every transit signature is verified
   against the key's public half, and every certificate against its CA, before
   it is returned. The client checks that the certificate is for its key and
   chains to the returned CA bundle.
@@ -114,14 +123,18 @@ See [`examples/config.yaml`](examples/config.yaml). In short:
     with the `kubernetes.io` claim, and the token must be bound to a pod and
     live at most `max_token_lifetime` (default 1h). The certificate name is
     `<ns>/<sa>/<pod>`.
+- `grant` per issuer (required): the `groups` and `networks` its logins may
+  ever receive. Every rule must fit inside it. Grants of different issuers
+  must not share group names or overlap in networks, and must not contain a
+  top-level `reserved_groups` entry.
 - `rules` per issuer, first match wins, no match is a 403. people rules match
   `groups` (any of); kubernetes rules match `namespace` and `service_account`
   globs. A rule sets the certificate's `groups`, the `ca`, an address `pool`,
   the `network_bits` (prefix length in the certificate) and `duration`
   (capped to the CA's expiry).
 
-Unknown keys are errors. Pools must lie inside their CA's networks, and rule
-groups inside the CA's groups.
+Unknown keys are errors. Pools must lie inside their grant and their CA's
+networks, and rule groups inside the grant and the CA's groups.
 
 **Addresses** are leased per (issuer, subject, device). For people the device
 is the client-supplied device name; for pods it is the pod UID. A lease is kept

@@ -1,5 +1,7 @@
 filippo.io/bigmod v0.1.0 h1:UNzDk7y9ADKST+axd9skUpBQeW7fG2KrTZyOE4uGQy8=
 filippo.io/bigmod v0.1.0/go.mod h1:OjOXDNlClLblvXdwgFFOQFJEocLhhtai8vGLy0JCZlI=
+github.com/awapf/terraform-provider-nebula v0.2.0 h1:YUN0ZdhemPIJ6RRJwJ0hdbN1+azrQpfNjbc1fmZGvUs=
+github.com/awapf/terraform-provider-nebula v0.2.0/go.mod h1:hju4ap4wFVsGB/2yhlSFcGLUcVeajylU+OUD2/7PhxM=
 github.com/dustin/go-humanize v1.1.0 h1:dbKTrvD0klcbBV/h4AWJdMuZogJACoMlvWIWZ5b2xWg=
 github.com/dustin/go-humanize v1.1.0/go.mod h1:hc1CvRkJMsgxqjmjMQF3QNRAZBwY8AXBAzKYoSX9sFI=
 github.com/go-jose/go-jose/v4 v4.1.9 h1:pKfeQkig1NmgK4hJrZYXLEYURXfoJB61Larw0uIW4gY=

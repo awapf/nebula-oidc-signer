@@ -2,10 +2,8 @@ module github.com/awapf/nebula-oidc-signer
 
 go 1.27.3
 
-replace github.com/awapf/terraform-provider-nebula => ../terraform-provider-nebula
-
 require (
-	github.com/awapf/terraform-provider-nebula v0.0.0-00010101000000-000000000000
+	github.com/awapf/terraform-provider-nebula v0.2.0
 	github.com/go-jose/go-jose/v4 v4.1.9
 	github.com/slackhq/nebula v1.12.0
 	modernc.org/sqlite v1.62.0

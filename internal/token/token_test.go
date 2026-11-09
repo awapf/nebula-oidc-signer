@@ -208,3 +208,41 @@ func TestDiscoveryIssuerMismatch(t *testing.T) {
 		t.Fatalf("discovery document issuer mismatch must fail, got %v", err)
 	}
 }
+
+func TestMaxAuthAge(t *testing.T) {
+	idp := testidp.New(t)
+	now := time.Now()
+	v := newVerifier(t, idp, func(o *token.Options) { o.MaxAuthAge = 12 * time.Hour })
+	tok := func(authTime any) string {
+		extra := map[string]any{}
+		if authTime != nil {
+			extra["auth_time"] = authTime
+		}
+		return idp.Sign(idp.Claims("alice", aud, extra))
+	}
+	// A refreshed ID token is fresh (iat now) but carries the original login
+	// time in auth_time.
+	if _, err := v.Verify(context.Background(), tok(now.Add(-11*time.Hour).Unix())); err != nil {
+		t.Fatalf("login 11h ago: %v", err)
+	}
+	for name, tc := range map[string]struct {
+		authTime any
+		reason   string
+	}{
+		"login too long ago":  {now.Add(-13 * time.Hour).Unix(), "auth_time"},
+		"missing auth_time":   {nil, "auth_time"},
+		"auth_time in future": {now.Add(time.Hour).Unix(), "auth_time"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := v.Verify(context.Background(), tok(tc.authTime))
+			var te *token.Error
+			if !errors.As(err, &te) || !strings.Contains(te.Reason, tc.reason) {
+				t.Fatalf("want token error about %q, got %v", tc.reason, err)
+			}
+		})
+	}
+	// Without MaxAuthAge, auth_time is not required.
+	if _, err := newVerifier(t, idp, nil).Verify(context.Background(), tok(nil)); err != nil {
+		t.Fatal(err)
+	}
+}

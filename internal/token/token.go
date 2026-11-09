@@ -31,6 +31,11 @@ type Options struct {
 	MaxTokenAge time.Duration
 	// MaxLifetime, when set, rejects tokens with exp-iat above it.
 	MaxLifetime time.Duration
+	// MaxAuthAge, when set, requires auth_time (when the user last
+	// actually logged in) and rejects tokens whose login is older than
+	// this. Refreshed ID tokens have a fresh iat but keep auth_time, so this
+	// bounds how long refresh tokens can keep a login alive.
+	MaxAuthAge time.Duration
 	// ClockSkew is tolerated on exp, nbf and iat.
 	ClockSkew time.Duration
 	// Now overrides the clock in tests.
@@ -220,6 +225,17 @@ func (v *Verifier) checkClaims(c Claims) error {
 	}
 	if age := now.Sub(iat); age > v.opts.MaxTokenAge+skew {
 		return reject("too old: issued %s ago, max_token_age is %s", age.Truncate(time.Second), v.opts.MaxTokenAge)
+	}
+	if v.opts.MaxAuthAge > 0 {
+		at, ok := c.time("auth_time")
+		switch {
+		case !ok:
+			return reject("missing auth_time")
+		case now.Add(skew).Before(at):
+			return reject("auth_time %s is in the future", at.UTC().Format(time.RFC3339))
+		case now.Sub(at) > v.opts.MaxAuthAge+skew:
+			return reject("login too old: auth_time %s ago, max_auth_age is %s", now.Sub(at).Truncate(time.Second), v.opts.MaxAuthAge)
+		}
 	}
 	if v.opts.MaxLifetime > 0 {
 		if life := exp.Sub(iat); life > v.opts.MaxLifetime {

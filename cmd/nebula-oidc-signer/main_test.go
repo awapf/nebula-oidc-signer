@@ -104,6 +104,7 @@ issuers:
     jwks: {discovery: true}
     max_token_age: 5m
     acr_values: [urn:passkey]
+    max_auth_age: 12h
     grant: {groups: [people], networks: [10.99.0.0/21]}
     rules:
       - {name: users, match: {groups: [nebula_users]}, ca: people, groups: [people], pool: 10.99.2.0/24, network_bits: 16, duration: 8h}
@@ -145,8 +146,8 @@ issuers:
 	// A person logs in with the browser flow.
 	laptop := t.TempDir()
 	if err := run(ctx, []string{"client", "--server", url, "--issuer", people.URL, "--client-id", "nebula",
-		"--scopes", "openid,profile,groups", "--device", "laptop", "--out-dir", laptop,
-		"--write-config", filepath.Join(laptop, "config.yml")}, e); err != nil {
+		"--scopes", "openid,profile,groups,offline_access", "--device", "laptop", "--out-dir", laptop,
+		"--write-config", filepath.Join(laptop, "config.yml"), "--refresh-token-file", filepath.Join(laptop, "refresh.token")}, e); err != nil {
 		t.Fatalf("people client: %v (%s)", err, e.stderr)
 	}
 	pc := checkFiles(t, laptop, []string{"people"})
@@ -165,6 +166,20 @@ issuers:
 	}
 	if after, _ := os.ReadFile(filepath.Join(laptop, "host.crt")); !bytes.Equal(before, after) {
 		t.Fatal("renew-before must not renew a fresh certificate")
+	}
+	// A later renewal uses the refresh token: no browser.
+	noBrowser := env{stdout: &bytes.Buffer{}, stderr: &bytes.Buffer{}, openURL: func(string) error {
+		t.Error("renewal with a refresh token must not open the browser")
+		return fmt.Errorf("no browser")
+	}}
+	if err := run(ctx, []string{"client", "--server", url, "--issuer", people.URL, "--client-id", "nebula",
+		"--device", "laptop", "--out-dir", laptop, "--refresh-token-file", filepath.Join(laptop, "refresh.token")}, noBrowser); err != nil {
+		t.Fatalf("refresh renewal: %v (%s)", err, noBrowser.stderr)
+	}
+	// (The certificate may be byte-identical: same key, IP and second, and
+	// ed25519 signatures are deterministic. The audit log below counts it.)
+	if people.Refreshes() != 1 {
+		t.Fatalf("want one refresh grant, got %d", people.Refreshes())
 	}
 
 	// A pod uses its projected token.
@@ -194,8 +209,8 @@ issuers:
 	case <-time.After(5 * time.Second):
 		t.Fatal("serve did not stop")
 	}
-	if logs := serverLog.String(); strings.Count(logs, `"msg":"issued"`) != 2 {
-		t.Fatalf("want two issued audit lines: %s", logs)
+	if logs := serverLog.String(); strings.Count(logs, `"msg":"issued"`) != 3 {
+		t.Fatalf("want three issued audit lines: %s", logs)
 	}
 }
 

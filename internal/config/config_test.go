@@ -175,6 +175,8 @@ func TestLoadRejects(t *testing.T) {
 		{"reserved group in grant", func(c m) {
 			issuer(c, 0)["grant"].(m)["groups"] = []any{"people", "admin", "infra"}
 		}, "reserved"},
+		{"max_auth_age on a kubernetes issuer", func(c m) { issuer(c, 1)["max_auth_age"] = "12h" }, "max_auth_age"},
+		{"negative max_auth_age", func(c m) { issuer(c, 0)["max_auth_age"] = "-1h" }, "max_auth_age"},
 		{"bad cert_version", func(c m) { c["cas"].([]any)[0].(m)["cert_version"] = 3 }, "cert_version"},
 	}
 	for _, tc := range cases {
@@ -310,5 +312,17 @@ func TestNetworkRejects(t *testing.T) {
 				t.Fatalf("want error containing %q, got %v", tc.want, err)
 			}
 		})
+	}
+}
+
+func TestMaxAuthAge(t *testing.T) {
+	c := base(t)
+	issuer(c, 0)["max_auth_age"] = "12h"
+	cfg, err := config.Load(write(t, c))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Issuers[0].MaxAuthAge.D() != 12*time.Hour || cfg.Issuers[1].MaxAuthAge != 0 {
+		t.Fatalf("max_auth_age %s %s", cfg.Issuers[0].MaxAuthAge, cfg.Issuers[1].MaxAuthAge)
 	}
 }

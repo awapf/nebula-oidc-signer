@@ -67,6 +67,10 @@ issuers:
     groups_claim: groups
     # The token's acr must be one of these (or set amr_values).
     acr_values: [urn:example:passkey]
+    # Clients renew hourly with a refresh token (client
+    # --refresh-token-file); this caps how long one passkey login lasts.
+    # Tokens must then carry auth_time.
+    max_auth_age: 12h
     # The most a login from this issuer can ever receive. Group names and
     # networks must not overlap with other issuers' grants, so a cert's
     # groups and address tell which kind of login produced it.
@@ -80,14 +84,14 @@ issuers:
         groups: [people, people-admin]
         pool: 10.99.1.0/24      # addresses are allocated from here
         network_bits: 16        # the certificate gets 10.99.1.x/16
-        duration: 12h
+        duration: 1h            # renewed with the refresh token
       - name: users
         match: {groups: [nebula_users]}
         ca: people
         groups: [people]
         pool: 10.99.2.0/23
         network_bits: 16
-        duration: 8h
+        duration: 1h
 
   # Pods present a projected service account token with this audience.
   - name: cluster-a

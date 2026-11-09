@@ -16,6 +16,8 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -41,10 +43,21 @@ type IdP struct {
 	// AuthClaims are the claims put into ID tokens issued via the code flow.
 	authClaims map[string]any
 	jwksHits   int
+	// refresh maps a live refresh token to its login.
+	refresh        map[string]login
+	refreshes      int
+	noRefreshIDTok bool
+	tokenStatus    int
 }
 
 type grant struct {
-	clientID, redirectURI, challenge, nonce string
+	clientID, redirectURI, challenge, nonce, scope string
+}
+
+// login is what a refresh token stands for.
+type login struct {
+	clientID string
+	authTime time.Time
 }
 
 // New starts a fake IdP that is closed when the test ends.
@@ -54,7 +67,7 @@ func New(t testing.TB) *IdP {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := &IdP{Key: key, KeyID: "test-key-1", t: t, codes: map[string]grant{}}
+	p := &IdP{Key: key, KeyID: "test-key-1", t: t, codes: map[string]grant{}, refresh: map[string]login{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /.well-known/openid-configuration", p.discovery)
 	mux.HandleFunc("GET /jwks", p.jwks)
@@ -185,7 +198,7 @@ func (p *IdP) authorize(w http.ResponseWriter, r *http.Request) {
 	p.mu.Lock()
 	p.codes[code] = grant{
 		clientID: q.Get("client_id"), redirectURI: q.Get("redirect_uri"),
-		challenge: q.Get("code_challenge"), nonce: q.Get("nonce"),
+		challenge: q.Get("code_challenge"), nonce: q.Get("nonce"), scope: q.Get("scope"),
 	}
 	p.mu.Unlock()
 	u, err := url.Parse(q.Get("redirect_uri"))
@@ -200,30 +213,98 @@ func (p *IdP) authorize(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, u.String(), http.StatusFound) //nolint:gosec // test IdP redirects wherever the test asks
 }
 
+// RevokeRefreshTokens invalidates all refresh tokens, like an ended session.
+func (p *IdP) RevokeRefreshTokens() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	clear(p.refresh)
+}
+
+// Refreshes returns how many refresh token grants succeeded.
+func (p *IdP) Refreshes() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.refreshes
+}
+
+// SetRefreshWithoutIDToken makes refresh grants omit the ID token, which
+// OIDC allows.
+func (p *IdP) SetRefreshWithoutIDToken(v bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.noRefreshIDTok = v
+}
+
+// SetTokenStatus makes the token endpoint fail with status (0 restores it).
+func (p *IdP) SetTokenStatus(status int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.tokenStatus = status
+}
+
+func badGrant(w http.ResponseWriter) {
+	w.WriteHeader(http.StatusBadRequest)
+	writeJSON(w, map[string]string{"error": "invalid_grant"})
+}
+
+// token implements the authorization_code grant (with PKCE) and the
+// refresh_token grant. Refresh tokens are issued for the offline_access
+// scope, rotate on every use and keep the original auth_time.
 func (p *IdP) token(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	f := r.PostForm
 	p.mu.Lock()
-	g, ok := p.codes[r.PostForm.Get("code")]
-	delete(p.codes, r.PostForm.Get("code"))
-	extra := p.authClaims
-	p.mu.Unlock()
-	sum := sha256.Sum256([]byte(r.PostForm.Get("code_verifier")))
-	switch {
-	case !ok, r.PostForm.Get("grant_type") != "authorization_code",
-		r.PostForm.Get("client_id") != g.clientID, r.PostForm.Get("redirect_uri") != g.redirectURI,
-		base64.RawURLEncoding.EncodeToString(sum[:]) != g.challenge:
-		w.WriteHeader(http.StatusBadRequest)
-		writeJSON(w, map[string]string{"error": "invalid_grant"})
+	defer p.mu.Unlock()
+	if p.tokenStatus != 0 {
+		w.WriteHeader(p.tokenStatus)
+		writeJSON(w, map[string]string{"error": "server_error"})
 		return
 	}
 	c := map[string]any{}
-	maps.Copy(c, extra)
-	if g.nonce != "" {
-		c["nonce"] = g.nonce
+	maps.Copy(c, p.authClaims)
+	var l login
+	var offline bool
+	switch f.Get("grant_type") {
+	case "authorization_code":
+		g, ok := p.codes[f.Get("code")]
+		delete(p.codes, f.Get("code"))
+		sum := sha256.Sum256([]byte(f.Get("code_verifier")))
+		if !ok || f.Get("client_id") != g.clientID || f.Get("redirect_uri") != g.redirectURI ||
+			base64.RawURLEncoding.EncodeToString(sum[:]) != g.challenge {
+			badGrant(w)
+			return
+		}
+		if g.nonce != "" {
+			c["nonce"] = g.nonce
+		}
+		l = login{clientID: g.clientID, authTime: time.Now()}
+		offline = slices.Contains(strings.Fields(g.scope), "offline_access")
+	case "refresh_token":
+		var ok bool
+		l, ok = p.refresh[f.Get("refresh_token")]
+		if !ok || f.Get("client_id") != l.clientID {
+			badGrant(w)
+			return
+		}
+		delete(p.refresh, f.Get("refresh_token"))
+		p.refreshes++
+		offline = true
+	default:
+		badGrant(w)
+		return
 	}
-	idToken := p.Sign(p.Claims("user-1", g.clientID, c))
-	writeJSON(w, map[string]any{"access_token": "opaque", "token_type": "Bearer", "id_token": idToken, "expires_in": 600})
+	c["auth_time"] = l.authTime.Unix()
+	resp := map[string]any{"access_token": "opaque", "token_type": "Bearer", "expires_in": 600}
+	if f.Get("grant_type") == "authorization_code" || !p.noRefreshIDTok {
+		resp["id_token"] = p.Sign(p.Claims("user-1", l.clientID, c))
+	}
+	if offline {
+		rt := rand.Text()
+		p.refresh[rt] = l
+		resp["refresh_token"] = rt
+	}
+	writeJSON(w, resp)
 }

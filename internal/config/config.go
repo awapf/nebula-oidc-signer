@@ -160,6 +160,9 @@ type Issuer struct {
 	GroupsClaim   string   `yaml:"groups_claim"`
 	ACRValues     []string `yaml:"acr_values"`
 	AMRValues     []string `yaml:"amr_values"`
+	// MaxAuthAge, optional, rejects tokens whose login (auth_time) is older
+	// than this. Set it when clients renew with refresh tokens.
+	MaxAuthAge Duration `yaml:"max_auth_age"`
 
 	// GrantConfig is the most this issuer's identities may ever receive.
 	GrantConfig *GrantConfig `yaml:"grant"`
@@ -545,6 +548,9 @@ func (c *Config) validateIssuer(i *Issuer) error {
 		Algorithms: i.Algorithms, MaxTokenAge: i.MaxTokenAge.D(),
 	}); err != nil {
 		return err
+	}
+	if i.MaxAuthAge < 0 || i.MaxAuthAge > 0 && i.Kind != KindPeople {
+		return errors.New("max_auth_age must be positive and is only for people issuers")
 	}
 	if i.Kind == KindPeople && len(i.ACRValues) == 0 && len(i.AMRValues) == 0 {
 		return errors.New("people issuers need acr_values or amr_values (e.g. the passkey ACR)")

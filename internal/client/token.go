@@ -9,10 +9,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -44,9 +46,93 @@ type OIDC struct {
 	Scopes []string
 	// ACRValues, when set, is sent as acr_values.
 	ACRValues string
+	// RefreshFile, when set, stores the refresh token (0600). Token then
+	// tries the refresh token first and opens the browser only when the
+	// IdP rejects it. Request the offline_access scope to get one.
+	RefreshFile string
 	// OpenURL shows the authorization URL to the user.
 	OpenURL    func(string) error
 	HTTPClient *http.Client
+}
+
+type tokenResponse struct {
+	IDToken      string `json:"id_token"`
+	RefreshToken string `json:"refresh_token"`
+	Error        string `json:"error"`
+}
+
+// errRejected is a 4xx from the token endpoint: the grant is no good.
+var errRejected = errors.New("rejected by the token endpoint")
+
+func (o *OIDC) tokenRequest(ctx context.Context, hc *http.Client, endpoint string, form url.Values) (*tokenResponse, error) {
+	form.Set("client_id", o.ClientID)
+	if o.ClientSecret != "" {
+		form.Set("client_secret", o.ClientSecret)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
+	resp, err := hc.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var tr tokenResponse
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&tr); err != nil {
+		return nil, fmt.Errorf("token endpoint: HTTP %d: %w", resp.StatusCode, err)
+	}
+	if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+		return nil, fmt.Errorf("token endpoint: HTTP %d: %s: %w", resp.StatusCode, tr.Error, errRejected)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("token endpoint: HTTP %d: %s", resp.StatusCode, tr.Error)
+	}
+	return &tr, nil
+}
+
+// refresh redeems the stored refresh token. ok is false when there is none
+// or the IdP rejected it; then a browser login is needed.
+func (o *OIDC) refresh(ctx context.Context, hc *http.Client, endpoint string) (idToken string, ok bool, err error) {
+	b, err := os.ReadFile(o.RefreshFile)
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("reading the refresh token: %w", err)
+	}
+	rt := strings.TrimSpace(string(b))
+	if rt == "" {
+		return "", false, nil
+	}
+	tr, err := o.tokenRequest(ctx, hc, endpoint, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {rt}})
+	if errors.Is(err, errRejected) {
+		_ = os.Remove(o.RefreshFile)
+		return "", false, nil
+	}
+	if err != nil {
+		// Transient: keep the refresh token and try again later rather
+		// than sending the user to the browser.
+		return "", false, fmt.Errorf("refreshing the ID token: %w", err)
+	}
+	if tr.RefreshToken != "" {
+		if err := o.saveRefresh(tr.RefreshToken); err != nil {
+			return "", false, err
+		}
+	}
+	if tr.IDToken == "" {
+		return "", false, nil
+	}
+	return tr.IDToken, true, nil
+}
+
+func (o *OIDC) saveRefresh(rt string) error {
+	if err := os.MkdirAll(filepath.Dir(o.RefreshFile), 0o700); err != nil {
+		return err
+	}
+	return writeAtomic(o.RefreshFile, []byte(rt+"\n"), 0o600)
 }
 
 type callback struct {
@@ -54,7 +140,8 @@ type callback struct {
 	err  error
 }
 
-// Token runs the browser flow and returns the ID token.
+// Token returns an ID token: from the stored refresh token when possible,
+// otherwise through the browser flow.
 func (o *OIDC) Token(ctx context.Context) (string, error) {
 	hc := o.HTTPClient
 	if hc == nil {
@@ -70,6 +157,12 @@ func (o *OIDC) Token(ctx context.Context) (string, error) {
 	}
 	if doc.Issuer != o.Issuer || doc.AuthorizationEndpoint == "" || doc.TokenEndpoint == "" {
 		return "", errors.New("OIDC discovery: issuer mismatch or missing endpoints")
+	}
+	if o.RefreshFile != "" {
+		tok, ok, err := o.refresh(ctx, hc, doc.TokenEndpoint)
+		if err != nil || ok {
+			return tok, err
+		}
 	}
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -154,39 +247,25 @@ func (o *OIDC) Token(ctx context.Context) (string, error) {
 		return "", cb.err
 	}
 
-	form := url.Values{
+	tr, err := o.tokenRequest(ctx, hc, doc.TokenEndpoint, url.Values{
 		"grant_type":    {"authorization_code"},
 		"code":          {cb.code},
 		"redirect_uri":  {redirect},
-		"client_id":     {o.ClientID},
 		"code_verifier": {verifier},
-	}
-	if o.ClientSecret != "" {
-		form.Set("client_secret", o.ClientSecret)
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, doc.TokenEndpoint, strings.NewReader(form.Encode()))
+	})
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("Accept", "application/json")
-	resp, err := hc.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	var tr struct {
-		IDToken string `json:"id_token"`
-		Error   string `json:"error"`
-	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&tr); err != nil {
-		return "", fmt.Errorf("token endpoint: HTTP %d: %w", resp.StatusCode, err)
-	}
-	if resp.StatusCode != http.StatusOK || tr.IDToken == "" {
-		return "", fmt.Errorf("token endpoint: HTTP %d: %s", resp.StatusCode, tr.Error)
+	if tr.IDToken == "" {
+		return "", errors.New("token endpoint returned no id_token")
 	}
 	if n := unverifiedClaim(tr.IDToken, "nonce"); n != nonce {
 		return "", errors.New("ID token nonce does not match")
+	}
+	if o.RefreshFile != "" && tr.RefreshToken != "" {
+		if err := o.saveRefresh(tr.RefreshToken); err != nil {
+			return "", err
+		}
 	}
 	return tr.IDToken, nil
 }

@@ -248,3 +248,67 @@ func TestExampleConfigLoads(t *testing.T) {
 		t.Fatalf("unexpected example: %+v", cfg.Issuers)
 	}
 }
+
+// withNetwork gives the k8s CA (whose rule has network_bits 16) a network
+// block.
+func withNetwork(c m) m {
+	ca := c["cas"].([]any)[1].(m)
+	ca["network"] = m{
+		"lighthouses": []any{
+			m{"address": "10.99.255.1", "endpoints": []any{"lh1.example.com:4242", "192.0.2.1:4242"}},
+			m{"address": "10.99.255.2", "endpoints": []any{"[2001:db8::2]:4242"}},
+		},
+		"relays": []any{"10.99.255.1"},
+	}
+	return ca["network"].(m)
+}
+
+func TestNetwork(t *testing.T) {
+	c := base(t)
+	withNetwork(c)
+	cfg, err := config.Load(write(t, c))
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := cfg.CA("k8s").Network
+	if n == nil || len(n.Lighthouses) != 2 || n.Lighthouses[0].Address != netip.MustParseAddr("10.99.255.1") ||
+		len(n.Lighthouses[0].Endpoints) != 2 || n.Lighthouses[1].Endpoints[0] != "[2001:db8::2]:4242" ||
+		len(n.Relays) != 1 || n.Relays[0] != netip.MustParseAddr("10.99.255.1") {
+		t.Fatalf("network %+v", n)
+	}
+	if cfg.CA("people").Network != nil {
+		t.Fatal("people CA has no network block")
+	}
+}
+
+func TestNetworkRejects(t *testing.T) {
+	lh := func(n m) m { return n["lighthouses"].([]any)[0].(m) }
+	cases := []struct {
+		name string
+		mod  func(n m)
+		want string
+	}{
+		{"no lighthouses", func(n m) { n["lighthouses"] = []any{} }, "lighthouse"},
+		{"bad lighthouse address", func(n m) { lh(n)["address"] = "lh1" }, "address"},
+		{"lighthouse without endpoints", func(n m) { lh(n)["endpoints"] = []any{} }, "endpoints"},
+		{"endpoint without port", func(n m) { lh(n)["endpoints"] = []any{"lh1.example.com"} }, "endpoint"},
+		{"endpoint with bad port", func(n m) { lh(n)["endpoints"] = []any{"lh1.example.com:99999"} }, "endpoint"},
+		{"duplicate lighthouse", func(n m) { n["lighthouses"].([]any)[1].(m)["address"] = "10.99.255.1" }, "duplicate"},
+		{"bad relay", func(n m) { n["relays"] = []any{"10.99.255"} }, "relay"},
+		{"unknown field", func(n m) { n["dns"] = true }, "dns"},
+		// A host can only reach a lighthouse over the overlay when the
+		// lighthouse is inside the host certificate's network.
+		{"lighthouse outside a rule's certificate network", func(n m) { lh(n)["address"] = "10.100.0.1" }, "outside"},
+		{"relay outside a rule's certificate network", func(n m) { n["relays"] = []any{"10.100.0.1"} }, "outside"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := base(t)
+			tc.mod(withNetwork(c))
+			_, err := config.Load(write(t, c))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("want error containing %q, got %v", tc.want, err)
+			}
+		})
+	}
+}
